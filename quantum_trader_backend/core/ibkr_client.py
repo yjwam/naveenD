@@ -139,6 +139,7 @@ class IBKRWrapper(EWrapper):
         """Receive option computation data (Greeks) - Fixed parameter signature"""
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
         
+        # if tickType == TickTypeEnum.LAST_OPTION_COMPUTATION:
         greeks_data = {
             'symbol': symbol,
             'req_id': reqId,
@@ -150,7 +151,9 @@ class IBKRWrapper(EWrapper):
             'option_price': optPrice if optPrice != -1 else 0,
             'underlying_price': undPrice if undPrice != -1 else 0
         }
-        
+        print(f"Received option computation for {symbol} of {tickType}")
+        print(greeks_data)
+        input("Press Enter to continue...")
         self._trigger_callbacks('market_data', {
             'symbol': symbol,
             'type': 'greeks',
@@ -366,7 +369,7 @@ class IBKRClient(EClient):
         self.wrapper.req_id_to_contract[req_id] = contract
         
         # Request option computation data
-        self.reqMktData(req_id, contract, "100,101,104,105,106,221", False, False, [])
+        self.reqMktData(req_id, contract, "100,101,104,105,106", True, False, [])
         
         return req_id
     
