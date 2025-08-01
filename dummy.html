@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><title>QuantumTrader Test</title></head>
+<body>
+    <h1>QuantumTrader Elite Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <div id="data" style="white-space: pre-wrap; font-family: monospace;"></div>
+
+    <script>
+        const ws = new WebSocket('ws://localhost:8765');
+        const status = document.getElementById('status');
+        const dataDiv = document.getElementById('data');
+
+        ws.onopen = function() {
+            status.textContent = '✅ Connected to QuantumTrader!';
+            status.style.color = 'green';
+        };
+
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            status.textContent = `✅ Connected - Last update: ${data.timestamp}`;
+            dataDiv.textContent = JSON.stringify(data, null, 2);
+        };
+
+        ws.onerror = function() {
+            status.textContent = '❌ Connection failed';
+            status.style.color = 'red';
+        };
+    </script>
+</body>
+</html>
