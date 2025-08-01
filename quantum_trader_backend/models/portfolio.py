@@ -157,18 +157,26 @@ class Portfolio:
         self.updated_at = datetime.now()
     
     def add_position(self, position: Position) -> None:
-        """Add a position to the portfolio"""
+        """Add a position to the portfolio - FIXED for options matching"""
         # Check if position already exists and update it
         for i, existing_pos in enumerate(self.positions):
-            if (existing_pos.symbol == position.symbol and 
-                existing_pos.strike_price == position.strike_price and
-                existing_pos.expiry == position.expiry and
-                existing_pos.option_type == position.option_type):
-                self.positions[i] = position
-                self.calculate_totals()
-                return
+            # For stocks: match symbol only
+            if existing_pos.position_type == PositionType.STOCK:
+                if existing_pos.symbol == position.symbol:
+                    self.positions[i] = position
+                    self.calculate_totals()
+                    return
+            # For options: match symbol, strike, expiry, and type
+            else:
+                if (existing_pos.symbol == position.symbol and 
+                    existing_pos.strike_price == position.strike_price and
+                    existing_pos.expiry == position.expiry and
+                    existing_pos.option_type == position.option_type):
+                    self.positions[i] = position
+                    self.calculate_totals()
+                    return
         
-        # Add new position
+        # Add new position if no match found
         self.positions.append(position)
         self.calculate_totals()
     

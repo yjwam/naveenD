@@ -97,64 +97,36 @@ class JSONFormatter:
         return formatted_portfolios
     
     def _format_positions(self, positions: List[Position]) -> List[Dict[str, Any]]:
-        """Format positions data to match frontend table structure"""
+        """Format positions data to match frontend table structure - FIXED"""
         formatted_positions = []
         
         for position in positions:
             # Base position data
             formatted_position = {
                 'symbol': position.symbol,
-                'type': position.position_type.value,
-                'account': position.account_type.value.replace('_', ' ').title(),
-                'priority': position.priority.value,
-                'current_price': self._safe_float(position.current_price, 2),
+                'account_id': position.account_id,
+                'account_type': position.account_type.value,
+                'position_type': position.position_type.value,
                 'quantity': position.quantity,
-                'value': self._safe_float(position.market_value),
-                'pnl': self._safe_float(position.unrealized_pnl),
-                'total_pnl_change': self._safe_float(position.unrealized_pnl + position.realized_pnl),
-                'day_pnl': self._safe_float(position.day_pnl),
-                'signal': position.signal.value,
-                'options_strategy': position.strategy or '',
+                'avg_cost': self._safe_float(position.avg_cost, 2),
+                'current_price': self._safe_float(position.current_price, 2),
+                'market_value': self._safe_float(position.market_value, 2),
+                'unrealized_pnl': self._safe_float(position.unrealized_pnl, 2),
+                'realized_pnl': self._safe_float(position.realized_pnl, 2),
+                'day_pnl': self._safe_float(position.day_pnl, 2),
+                'strike_price': self._safe_float(position.strike_price, 2) if position.strike_price else 0,
+                'expiry': position.expiry or "",
+                'option_type': position.option_type or "0",
+                'greeks': position.greeks.to_dict() if position.greeks else None,
+                'strategy': position.strategy or "Complex Strategy",
                 'confidence': position.confidence,
-                'notes': position.notes
+                'signal': position.signal.value,
+                'priority': position.priority.value,
+                'notes': position.notes,
+                'levels': position.levels or {},
+                'created_at': position.created_at.isoformat(),
+                'updated_at': position.updated_at.isoformat()
             }
-            
-            # Options-specific fields
-            if position.position_type.value in ['Call', 'Put']:
-                formatted_position.update({
-                    'strike_price': self._safe_float(position.strike_price),
-                    'expiry': position.expiry or '',
-                    'option_price': self._safe_float(position.current_price, 2),
-                    'option_type': position.option_type or ''
-                })
-                
-                # Greeks
-                if position.greeks:
-                    formatted_position['greeks'] = {
-                        'delta': self._safe_float(position.greeks.delta, 3),
-                        'gamma': self._safe_float(position.greeks.gamma, 3),
-                        'theta': self._safe_float(position.greeks.theta, 3),
-                        'vega': self._safe_float(position.greeks.vega, 3),
-                        'iv': self._safe_float(position.greeks.implied_volatility, 3)
-                    }
-                else:
-                    formatted_position['greeks'] = {
-                        'delta': 0, 'gamma': 0, 'theta': 0, 'vega': 0, 'iv': 0
-                    }
-                
-                # Levels (support/resistance levels for options)
-                formatted_position['levels'] = position.levels or {}
-            
-            # Stock-specific fields
-            else:
-                formatted_position.update({
-                    'strike_price': None,
-                    'expiry': None,
-                    'option_price': None,
-                    'option_type': None,
-                    'greeks': None,
-                    'levels': {}
-                })
             
             formatted_positions.append(formatted_position)
         

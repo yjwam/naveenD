@@ -8,9 +8,10 @@ from dataclasses import asdict
 from config.settings import settings
 from utils.logger import get_logger
 from models.market_data import MarketData, IndexData, Greeks, MarketDataType
-from models.portfolio import Portfolio, Position, AccountType, PositionType
+from models.portfolio import Portfolio, Position, AccountType, PositionType, Signal, Priority
 from models.dashboard import DashboardData, Alert, AlertType, AlertLevel, SystemStatus, PerformanceMetrics, RiskMetrics
 from utils.calculations import OptionsCalculator, PortfolioCalculator, StrategyAnalyzer
+
 
 class DataManager:
     """Centralized data management and processing"""
@@ -142,57 +143,123 @@ class DataManager:
                 self.logger.error(f"Error updating Greeks for {symbol}: {e}")
     
     def update_position(self, account_id: str, position_data: Dict[str, Any]) -> None:
-        """Update portfolio position"""
+        """Update portfolio position - FIXED for options"""
         with self._lock:
             try:
                 contract = position_data['contract']
                 symbol = contract.symbol
+                
+                self.logger.info(f"Processing position update: {symbol}, secType: {contract.secType}, position: {position_data.get('position', 0)}")
+                
+                # Handle zero positions (closed positions) - REMOVE from portfolio
+                position_quantity = position_data.get('position', 0)
+                if position_quantity == 0:
+                    self.logger.info(f"Position closed for {symbol}, removing from portfolio")
+                    self._remove_closed_position(account_id, contract)
+                    return
                 
                 # Determine account type
                 account_type = AccountType.INDIVIDUAL_TAXABLE  # Default
                 if 'retirement' in account_id.lower() or 'ira' in account_id.lower():
                     account_type = AccountType.RETIREMENT_TAX_FREE
                 
-                # Determine position type
+                # Determine position type - FIXED for options
                 position_type = PositionType.STOCK
+                option_type = None
+                
                 if contract.secType == 'OPT':
-                    position_type = PositionType.CALL if contract.right == 'C' else PositionType.PUT
+                    if hasattr(contract, 'right') and contract.right:
+                        if contract.right.upper() == 'C':
+                            position_type = PositionType.CALL
+                            option_type = 'C'
+                        elif contract.right.upper() == 'P':
+                            position_type = PositionType.PUT
+                            option_type = 'P'
+                        else:
+                            self.logger.warning(f"Unknown option right: {contract.right}")
+                            return
+                    else:
+                        self.logger.warning(f"Option contract missing 'right' field for {symbol}")
+                        return
                 
                 # Get current market price
                 current_price = position_data.get('market_price', 0)
-                if current_price == 0 and symbol in self.market_data:
-                    current_price = self.market_data[symbol].price
+                if current_price == 0:
+                    # For options, try to get from market data or use avgCost as fallback
+                    market_data = self.market_data.get(symbol)
+                    if market_data:
+                        current_price = market_data.price
+                    else:
+                        current_price = position_data.get('average_cost', 0)
                 
                 # Get Greeks if available for options
                 greeks = None
                 if position_type != PositionType.STOCK:
-                    option_symbol = f"{symbol}_{contract.strike}_{contract.expiry}_{contract.right}"
-                    greeks = self.greeks_data.get(option_symbol)
+                    # Create option key for Greeks lookup
+                    strike_str = str(contract.strike) if hasattr(contract, 'strike') else ""
+                    expiry_str = contract.lastTradeDateOrContractMonth if hasattr(contract, 'lastTradeDateOrContractMonth') else ""
+                    option_key = f"{symbol}_{strike_str}_{expiry_str}_{option_type}"
+                    greeks = self.greeks_data.get(option_key)
+                    
+                    # If no live Greeks, create placeholder
+                    if not greeks:
+                        greeks = Greeks(
+                            delta=0.0,
+                            gamma=0.0, 
+                            theta=0.0,
+                            vega=0.0,
+                            rho=0.0,
+                            implied_volatility=0.0,
+                            timestamp=datetime.now()
+                        )
                 
-                # Create position object
+                # Parse expiry date properly
+                expiry = None
+                if hasattr(contract, 'lastTradeDateOrContractMonth') and contract.lastTradeDateOrContractMonth:
+                    expiry_raw = contract.lastTradeDateOrContractMonth
+                    # Convert IBKR format (YYYYMMDD) to readable format
+                    if len(expiry_raw) == 8 and expiry_raw.isdigit():
+                        year = expiry_raw[:4]
+                        month = expiry_raw[4:6] 
+                        day = expiry_raw[6:8]
+                        expiry = f"{month}/{day}/{year}"
+                    else:
+                        expiry = expiry_raw
+                
+                # Create position object with all required fields
                 position = Position(
                     symbol=symbol,
                     account_id=account_id,
                     account_type=account_type,
                     position_type=position_type,
-                    quantity=int(position_data['position']),
-                    avg_cost=position_data.get('average_cost', 0),
-                    current_price=current_price,
-                    market_value=position_data.get('market_value', 0),
-                    unrealized_pnl=position_data.get('unrealized_pnl', 0),
-                    realized_pnl=position_data.get('realized_pnl', 0),
-                    strike_price=contract.strike if hasattr(contract, 'strike') else None,
-                    expiry=contract.lastTradeDateOrContractMonth if hasattr(contract, 'lastTradeDateOrContractMonth') else None,
-                    option_type=contract.right if hasattr(contract, 'right') else None,
-                    greeks=greeks
+                    quantity=int(position_quantity),  # Use the variable we already extracted
+                    avg_cost=float(position_data.get('average_cost', 0)),
+                    current_price=float(current_price),
+                    market_value=float(position_data.get('market_value', 0)),
+                    unrealized_pnl=float(position_data.get('unrealized_pnl', 0)),
+                    realized_pnl=float(position_data.get('realized_pnl', 0)),
+                    day_pnl=0.0,  # Will be calculated
+                    strike_price=float(contract.strike) if hasattr(contract, 'strike') else None,
+                    expiry=expiry,
+                    option_type=option_type,
+                    greeks=greeks,
+                    strategy="Complex Strategy",  # Will be updated by strategy analyzer
+                    confidence=50,
+                    signal=Signal.HOLD,
+                    priority=Priority.MEDIUM,
+                    notes="",
+                    levels={}
                 )
                 
-                # Analyze strategy
-                if account_id in self.portfolios:
-                    portfolio_positions = self.portfolios[account_id].positions
-                    position.strategy = StrategyAnalyzer.identify_strategy(
-                        portfolio_positions + [position], symbol
-                    )
+                # Calculate market value and P&L if not provided correctly
+                if position.market_value == 0 or position.unrealized_pnl == 0:
+                    if position_type == PositionType.STOCK:
+                        position.market_value = position.quantity * position.current_price
+                        position.unrealized_pnl = (position.current_price - position.avg_cost) * position.quantity
+                    else:  # Options
+                        # Options market value is price * quantity * 100 (multiplier)
+                        position.market_value = position.quantity * position.current_price * 100
+                        position.unrealized_pnl = (position.current_price - position.avg_cost) * position.quantity * 100
                 
                 # Get or create portfolio
                 if account_id not in self.portfolios:
@@ -207,11 +274,17 @@ class DataManager:
                 
                 self.last_portfolio_update = datetime.now()
                 
-                self.logger.debug(f"Updated position {symbol} for account {account_id}")
+                position_desc = f"{symbol}"
+                if position_type != PositionType.STOCK:
+                    position_desc += f" {expiry} ${position.strike_price} {option_type}"
+                
+                self.logger.info(f"Updated position: {position_desc} (qty: {position.quantity}) for account {account_id}")
                 
             except Exception as e:
                 self.logger.error(f"Error updating position: {e}")
-    
+                import traceback
+                self.logger.error(traceback.format_exc())
+
     def update_account_value(self, account_id: str, key: str, value: str, currency: str) -> None:
         """Update account value"""
         with self._lock:
@@ -391,3 +464,106 @@ class DataManager:
                     self.market_data, self.portfolios, self.alerts
                 ]) / 1024 / 1024
             }
+        
+    def debug_positions(self) -> None:
+        """Debug method to check positions"""
+        with self._lock:
+            self.logger.info(f"=== PORTFOLIO DEBUG ===")
+            self.logger.info(f"Total portfolios: {len(self.portfolios)}")
+            
+            for account_id, portfolio in self.portfolios.items():
+                self.logger.info(f"Account {account_id}: {len(portfolio.positions)} positions")
+                
+                for i, position in enumerate(portfolio.positions):
+                    pos_info = f"  {i+1}. {position.symbol} {position.position_type.value}"
+                    if position.position_type != PositionType.STOCK:
+                        pos_info += f" ${position.strike_price} {position.option_type} {position.expiry}"
+                    pos_info += f" qty:{position.quantity} mv:${position.market_value:.2f}"
+                    self.logger.info(pos_info)
+
+        def _remove_closed_position(self, account_id: str, contract) -> None:
+            """Remove a closed position from portfolio"""
+            try:
+                if account_id not in self.portfolios:
+                    return
+                
+                portfolio = self.portfolios[account_id]
+                symbol = contract.symbol
+                
+                # For stocks: match by symbol only
+                if contract.secType == 'STK':
+                    for i, position in enumerate(portfolio.positions):
+                        if (position.symbol == symbol and 
+                            position.position_type == PositionType.STOCK):
+                            removed_pos = portfolio.positions.pop(i)
+                            self.logger.info(f"Removed closed stock position: {symbol}")
+                            portfolio.calculate_totals()
+                            return
+                
+                # For options: match by symbol, strike, expiry, and type
+                elif contract.secType == 'OPT':
+                    option_type = None
+                    if hasattr(contract, 'right') and contract.right:
+                        option_type = contract.right.upper()
+                    
+                    strike_price = float(contract.strike) if hasattr(contract, 'strike') else None
+                    
+                    # Parse expiry
+                    expiry = None
+                    if hasattr(contract, 'lastTradeDateOrContractMonth') and contract.lastTradeDateOrContractMonth:
+                        expiry_raw = contract.lastTradeDateOrContractMonth
+                        if len(expiry_raw) == 8 and expiry_raw.isdigit():
+                            year = expiry_raw[:4]
+                            month = expiry_raw[4:6] 
+                            day = expiry_raw[6:8]
+                            expiry = f"{month}/{day}/{year}"
+                        else:
+                            expiry = expiry_raw
+                    
+                    for i, position in enumerate(portfolio.positions):
+                        if (position.symbol == symbol and 
+                            position.position_type != PositionType.STOCK and
+                            position.strike_price == strike_price and
+                            position.expiry == expiry and
+                            position.option_type == option_type):
+                            removed_pos = portfolio.positions.pop(i)
+                            self.logger.info(f"Removed closed option position: {symbol} {expiry} ${strike_price} {option_type}")
+                            portfolio.calculate_totals()
+                            return
+                
+                # For futures and other instruments
+                else:
+                    for i, position in enumerate(portfolio.positions):
+                        if position.symbol == symbol:
+                            # Additional matching for futures
+                            if (hasattr(contract, 'lastTradeDateOrContractMonth') and 
+                                contract.lastTradeDateOrContractMonth):
+                                if position.expiry == contract.lastTradeDateOrContractMonth:
+                                    removed_pos = portfolio.positions.pop(i)
+                                    self.logger.info(f"Removed closed {contract.secType} position: {symbol}")
+                                    portfolio.calculate_totals()
+                                    return
+                            else:
+                                # No expiry matching needed
+                                removed_pos = portfolio.positions.pop(i)
+                                self.logger.info(f"Removed closed {contract.secType} position: {symbol}")
+                                portfolio.calculate_totals()
+                                return
+                                
+            except Exception as e:
+                self.logger.error(f"Error removing closed position for {symbol}: {e}")
+
+        def cleanup_empty_portfolios(self) -> None:
+            """Remove portfolios with no positions"""
+            try:
+                empty_accounts = []
+                for account_id, portfolio in self.portfolios.items():
+                    if len(portfolio.positions) == 0 and portfolio.cash_balance == 0:
+                        empty_accounts.append(account_id)
+                
+                for account_id in empty_accounts:
+                    del self.portfolios[account_id]
+                    self.logger.info(f"Removed empty portfolio for account {account_id}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error cleaning up empty portfolios: {e}")
