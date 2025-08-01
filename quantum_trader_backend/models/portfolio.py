@@ -12,6 +12,7 @@ class PositionType(Enum):
     STOCK = "Stock"
     CALL = "Call"
     PUT = "Put"
+    FUTURE = "Future"
 
 class Priority(Enum):
     LOW = "LOW"

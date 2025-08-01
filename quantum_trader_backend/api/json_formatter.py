@@ -49,7 +49,7 @@ class JSONFormatter:
         }
         
         for attr_name, display_name in index_mapping.items():
-            market_data = getattr(index_data, attr_name, None)
+            market_data = getattr(index_data, attr_name.upper(), None)
             if market_data:
                 formatted_indices[display_name] = {
                     'price': self._safe_float(market_data.price),

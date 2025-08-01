@@ -56,7 +56,7 @@ class QuantumTraderApplication:
             if not self.ibkr_client.connect_and_run():
                 self.logger.error("Failed to connect to IBKR")
                 return False
-            
+            self.ibkr_client.reqMarketDataType(3)
             self.logger.info("IBKR connection established")
             
             # Start data manager callbacks

@@ -143,6 +143,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+vevn/
+error.txt
+temp.py
 
 # Spyder project settings
 .spyderproject

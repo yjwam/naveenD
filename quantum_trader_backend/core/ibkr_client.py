@@ -7,7 +7,7 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 from ibapi.common import TickerId, BarData
-from ibapi.ticktype import TickType
+from ibapi.ticktype import TickType, TickTypeEnum
 
 from config.settings import settings
 from utils.logger import IBKRLogger
@@ -85,20 +85,21 @@ class IBKRWrapper(EWrapper):
         
         # Update price data based on tick type
         tick_data = self.market_data[reqId]
-        
-        if tickType == TickType.LAST or tickType == TickType.DELAYED_LAST:
+        idx2name = TickTypeEnum.idx2name
+
+        if tickType == TickTypeEnum.LAST or tickType == TickTypeEnum.DELAYED_LAST:
             tick_data['last_price'] = price
-        elif tickType == TickType.BID or tickType == TickType.DELAYED_BID:
+        elif tickType == TickTypeEnum.BID or tickType == TickTypeEnum.DELAYED_BID:
             tick_data['bid'] = price
-        elif tickType == TickType.ASK or tickType == TickType.DELAYED_ASK:
+        elif tickType == TickTypeEnum.ASK or tickType == TickTypeEnum.DELAYED_ASK:
             tick_data['ask'] = price
-        elif tickType == TickType.HIGH or tickType == TickType.DELAYED_HIGH:
+        elif tickType == TickTypeEnum.HIGH or tickType == TickTypeEnum.DELAYED_HIGH:
             tick_data['high'] = price
-        elif tickType == TickType.LOW or tickType == TickType.DELAYED_LOW:
+        elif tickType == TickTypeEnum.LOW or tickType == TickTypeEnum.DELAYED_LOW:
             tick_data['low'] = price
-        elif tickType == TickType.CLOSE or tickType == TickType.DELAYED_CLOSE:
+        elif tickType == TickTypeEnum.CLOSE or tickType == TickTypeEnum.DELAYED_CLOSE:
             tick_data['close'] = price
-        
+
         # Trigger market data callback
         self._trigger_callbacks('market_data', {
             'symbol': symbol,
@@ -115,12 +116,12 @@ class IBKRWrapper(EWrapper):
         
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
         tick_data = self.market_data[reqId]
-        
-        if tickType == TickType.VOLUME or tickType == TickType.DELAYED_VOLUME:
+
+        if tickType == TickTypeEnum.VOLUME or tickType == TickTypeEnum.DELAYED_VOLUME:
             tick_data['volume'] = size
-        elif tickType == TickType.BID_SIZE or tickType == TickType.DELAYED_BID_SIZE:
+        elif tickType == TickTypeEnum.BID_SIZE or tickType == TickTypeEnum.DELAYED_BID_SIZE:
             tick_data['bid_size'] = size
-        elif tickType == TickType.ASK_SIZE or tickType == TickType.DELAYED_ASK_SIZE:
+        elif tickType == TickTypeEnum.ASK_SIZE or tickType == TickTypeEnum.DELAYED_ASK_SIZE:
             tick_data['ask_size'] = size
         
         self._trigger_callbacks('market_data', {
@@ -365,7 +366,7 @@ class IBKRClient(EClient):
         self.wrapper.req_id_to_contract[req_id] = contract
         
         # Request option computation data
-        self.reqMktData(req_id, contract, "100,101,104,105,106,13", False, False, [])
+        self.reqMktData(req_id, contract, "100,101,104,105,106,221", False, False, [])
         
         return req_id
     

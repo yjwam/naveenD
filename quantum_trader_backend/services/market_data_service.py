@@ -140,8 +140,7 @@ class MarketDataService:
         
         try:
             # Request market data with appropriate tick list
-            self.ibkr_client.reqMktData(req_id, contract, tick_list, False, False, [])
-            
+            self.ibkr_client.reqMktData(req_id, contract, "", True, False, [])
             self.logger.info(f"Market data requested for {symbol}", 
                             req_id=req_id, sec_type=sec_type, tick_list=tick_list)
             return req_id

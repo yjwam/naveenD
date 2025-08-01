@@ -181,6 +181,9 @@ class DataManager:
                     else:
                         self.logger.warning(f"Option contract missing 'right' field for {symbol}")
                         return
+                    
+                elif contract.secType == 'FUT':
+                    position_type = PositionType.FUTURE
                 
                 # Get current market price
                 current_price = position_data.get('market_price', 0)
