@@ -121,37 +121,92 @@ class DataManager:
                 self.logger.error(f"Error updating market data for {symbol}: {e}")
     
     def update_greeks_data(self, symbol: str, greeks_data: Dict[str, Any]) -> None:
-        """Update Greeks data for an option - FIXED"""
+        """Update Greeks data for an option - FIXED with better validation"""
         with self._lock:
             try:
+                # Validate and extract Greeks data with defaults
+                delta = float(greeks_data.get('delta', 0.0))
+                gamma = float(greeks_data.get('gamma', 0.0))
+                theta = float(greeks_data.get('theta', 0.0))
+                vega = float(greeks_data.get('vega', 0.0))
+                rho = float(greeks_data.get('rho', 0.0))
+                implied_vol = float(greeks_data.get('implied_vol', 0.25))
+                
+                # Additional validation
+                if abs(delta) > 1.0:
+                    delta = 0.0
+                if gamma < 0 or gamma > 10.0:
+                    gamma = 0.0
+                if vega < 0 or vega > 1000.0:
+                    vega = 0.0
+                if abs(theta) > 100.0:
+                    theta = 0.0
+                if implied_vol <= 0 or implied_vol > 5.0:
+                    implied_vol = 0.25
+                
                 # Create Greeks object
                 greeks = Greeks(
-                    delta=float(greeks_data.get('delta', 0)),
-                    gamma=float(greeks_data.get('gamma', 0)),
-                    theta=float(greeks_data.get('theta', 0)),
-                    vega=float(greeks_data.get('vega', 0)),
-                    rho=float(greeks_data.get('rho', 0)),
-                    implied_volatility=float(greeks_data.get('implied_vol', 0)),
+                    delta=delta,
+                    gamma=gamma,
+                    theta=theta,
+                    vega=vega,
+                    rho=rho,
+                    implied_volatility=implied_vol,
                     timestamp=datetime.now()
                 )
                 
-                # Store in greeks data cache
-                self.greeks_data[symbol] = greeks
+                # Store in greeks data cache with better key handling
+                greeks_key = symbol
+                if 'option_price' in greeks_data:
+                    # Try to create a more specific key for options
+                    tick_type = greeks_data.get('tick_type', 0)
+                    greeks_key = f"{symbol}_{tick_type}"
+                
+                self.greeks_data[greeks_key] = greeks
                 
                 # Update all matching option positions with these Greeks
+                updated_positions = 0
                 for portfolio in self.portfolios.values():
                     for position in portfolio.positions:
+                        # Match by symbol and ensure it's an option
                         if (position.symbol == symbol and 
                             position.position_type in [PositionType.CALL, PositionType.PUT]):
+                            
+                            # For delayed data, we might get generic Greeks for the symbol
+                            # So we apply them to all options of that underlying
+                            old_greeks = position.greeks
                             position.greeks = greeks
                             position.updated_at = datetime.now()
+                            updated_positions += 1
+                            
+                            # Log the update
+                            change_str = ""
+                            if old_greeks:
+                                delta_change = greeks.delta - old_greeks.delta
+                                change_str = f" (Δ change: {delta_change:+.3f})"
+                            
+                            self.logger.debug(f"Updated Greeks for {position.symbol} "
+                                            f"{position.option_type} ${position.strike_price}{change_str}")
                 
                 self.last_greeks_update = datetime.now()
                 
-                self.logger.info(f"Updated Greeks for {symbol}: Δ={greeks.delta:.3f}, Γ={greeks.gamma:.3f}")
-                
+                # Log summary
+                if updated_positions > 0:
+                    self.logger.info(f"Updated Greeks for {symbol}: "
+                                f"Δ={greeks.delta:.3f}, Γ={greeks.gamma:.3f}, "
+                                f"Θ={greeks.theta:.3f}, V={greeks.vega:.3f}, "
+                                f"IV={greeks.implied_volatility:.1%} "
+                                f"({updated_positions} positions updated)")
+                else:
+                    self.logger.warning(f"Received Greeks for {symbol} but no matching positions found")
+                    
+            except (ValueError, TypeError) as e:
+                self.logger.error(f"Error processing Greeks data for {symbol}: {e}")
+                self.logger.debug(f"Invalid Greeks data: {greeks_data}")
             except Exception as e:
-                self.logger.error(f"Error updating Greeks for {symbol}: {e}")
+                self.logger.error(f"Unexpected error updating Greeks for {symbol}: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
     
     def update_position(self, account_id: str, position_data: Dict[str, Any]) -> None:
         """Update portfolio position - FIXED for proper IBKR data handling"""

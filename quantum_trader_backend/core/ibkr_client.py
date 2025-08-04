@@ -138,10 +138,7 @@ class IBKRWrapper(EWrapper):
         """Receive option computation data (Greeks) - FIXED"""
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
         # Only process live option computation ticks
-        print(f"Received tickOptionComputation for {symbol} with tickType {tickType}")
-        print(f"Data: impliedVol={impliedVol}, delta={delta}, optPrice={optPrice}, undPrice={undPrice}")
-        print(f"tickAttrib: {tickAttrib}, gamma={gamma}, vega={vega}, theta={theta}")
-        if tickType in [10, 82]:  # Model option computation tick types
+        if tickType in [10, 11, 12, 13, 80, 82]:  # Model option computation tick types
             greeks_data = {
                 'symbol': symbol,
                 'req_id': reqId,
@@ -151,7 +148,6 @@ class IBKRWrapper(EWrapper):
                 'vega': vega if vega != -2 and vega >= 0 else 0,
                 'theta': theta if theta != -2 else 0,
                 'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0,
-                'underlying_price': undPrice if undPrice > 0 and undPrice != -1 else 0
             }
             self.logger.logger.info(f"Received Greeks for {symbol}: Delta={delta:.3f}, Gamma={gamma:.3f}")
             
@@ -368,10 +364,11 @@ class IBKRClient(EClient):
         req_id = self.get_next_req_id()
         self.wrapper.req_id_to_symbol[req_id] = symbol
         self.wrapper.req_id_to_contract[req_id] = contract
-        
+        print(contract)
+        input()
         # Request live option computation data (NOT snapshot for Greeks)
         # Use specific tick types for Greeks: 100,101,104,105,106
-        self.reqMktData(req_id, contract, "100,101,104,105,106", False, False, [])
+        self.reqMktData(req_id, contract, "", True, False, [])
         
         self.logger.market_data_event(symbol, "greeks_requested", {"req_id": req_id})
         return req_id

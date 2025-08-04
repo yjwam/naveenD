@@ -7,7 +7,7 @@ class IBKRConfig:
     """IBKR connection configuration"""
     host: str = "127.0.0.1"
     port: int = 7497  # TWS port (7496 for live, 7497 for paper)
-    client_id: int = 1
+    client_id: int = 2
     timeout: int = 10
     max_reconnect_attempts: int = 5
     reconnect_delay: int = 5
