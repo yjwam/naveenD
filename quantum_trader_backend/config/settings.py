@@ -4,13 +4,15 @@ from typing import List, Dict
 
 @dataclass
 class IBKRConfig:
-    """IBKR connection configuration"""
+    """IBKR connection configuration - FIXED"""
     host: str = "127.0.0.1"
     port: int = 7497  # TWS port (7496 for live, 7497 for paper)
-    client_id: int = 2
-    timeout: int = 10
-    max_reconnect_attempts: int = 5
-    reconnect_delay: int = 5
+    client_id: int = 1
+    timeout: int = 30  # Increased from 10
+    max_reconnect_attempts: int = 3  # Reduced from 5
+    reconnect_delay: int = 10  # Increased from 5
+    connection_check_interval: int = 30  # NEW: How often to check connection health
+    request_delay: float = 1.0  # NEW: Delay between requests to avoid overwhelming
 
 @dataclass
 class WebSocketConfig:
@@ -23,13 +25,18 @@ class WebSocketConfig:
 
 @dataclass
 class DataConfig:
-    """Data management configuration"""
-    update_frequency: float = 1.0  # seconds
-    market_data_frequency: float = 0.1  # seconds
-    greeks_update_frequency: float = 5.0  # seconds
-    account_update_frequency: float = 30.0  # seconds
+    """Data management configuration - FIXED"""
+    update_frequency: float = 2.0  # Increased from 1.0
+    market_data_frequency: float = 5.0  # Increased from 0.1
+    greeks_update_frequency: float = 30.0  # Increased from 5.0
+    account_update_frequency: float = 60.0  # Increased from 30.0
     cache_size: int = 10000
     history_retention_days: int = 30
+    
+    # NEW: Market data limits
+    max_market_data_subscriptions: int = 5  # Limit concurrent subscriptions
+    market_data_retry_limit: int = 3  # Max retries per symbol
+    snapshot_mode: bool = True  # Use snapshots instead of streaming
 
 @dataclass
 class AlertConfig:
@@ -50,7 +57,7 @@ class AlertConfig:
 
 @dataclass
 class AppSettings:
-    """Main application settings"""
+    """Main application settings - FIXED"""
     ibkr: IBKRConfig
     websocket: WebSocketConfig
     data: DataConfig
@@ -58,31 +65,39 @@ class AppSettings:
     debug: bool = False
     log_level: str = "INFO"
     
-    # Market indices to track
+    # Market indices to track - REDUCED to avoid issues
     market_indices: List[str] = None
     
     # Account types
     account_types: List[str] = None
     
+    # NEW: Connection management
+    startup_delay: int = 10  # Wait time after connection before making requests
+    graceful_shutdown_timeout: int = 30  # Time to wait for graceful shutdown
+    
     def __post_init__(self):
         if self.market_indices is None:
-            self.market_indices = ["SPY", "QQQ", "NASDAQ", "VIX", "DXY", "TNX"]  # TNX = 10Y Treasury
+            # Reduced list to avoid subscription issues
+            self.market_indices = ["SPY", "QQQ"]  # Removed VIX, TNX temporarily
             
         if self.account_types is None:
             self.account_types = ["DU123456", "DU789012"]  # Replace with actual account IDs
 
 # Environment-based configuration
 def get_settings() -> AppSettings:
-    """Get application settings based on environment"""
+    """Get application settings based on environment - FIXED"""
     
     # Determine if running in production
     is_production = os.getenv("ENVIRONMENT", "development") == "production"
     
+    # IBKR configuration with better defaults
     ibkr_config = IBKRConfig(
         host=os.getenv("IBKR_HOST", "127.0.0.1"),
         port=int(os.getenv("IBKR_PORT", "7496" if is_production else "7497")),
         client_id=int(os.getenv("IBKR_CLIENT_ID", "1")),
-        timeout=int(os.getenv("IBKR_TIMEOUT", "10"))
+        timeout=int(os.getenv("IBKR_TIMEOUT", "30")),  # Increased default
+        max_reconnect_attempts=int(os.getenv("IBKR_MAX_RECONNECT", "3")),  # Reduced
+        reconnect_delay=int(os.getenv("IBKR_RECONNECT_DELAY", "10"))  # Increased
     )
     
     websocket_config = WebSocketConfig(
@@ -91,10 +106,13 @@ def get_settings() -> AppSettings:
         max_connections=int(os.getenv("WS_MAX_CONNECTIONS", "100"))
     )
     
+    # Data configuration with conservative defaults
     data_config = DataConfig(
-        update_frequency=float(os.getenv("UPDATE_FREQUENCY", "1.0")),
-        market_data_frequency=float(os.getenv("MARKET_DATA_FREQUENCY", "0.1")),
-        cache_size=int(os.getenv("CACHE_SIZE", "10000"))
+        update_frequency=float(os.getenv("UPDATE_FREQUENCY", "2.0")),  # Slower updates
+        market_data_frequency=float(os.getenv("MARKET_DATA_FREQUENCY", "5.0")),  # Much slower
+        cache_size=int(os.getenv("CACHE_SIZE", "10000")),
+        max_market_data_subscriptions=int(os.getenv("MAX_MARKET_SUBSCRIPTIONS", "5")),
+        snapshot_mode=os.getenv("MARKET_DATA_SNAPSHOT_MODE", "true").lower() == "true"
     )
     
     alert_config = AlertConfig(
@@ -107,7 +125,8 @@ def get_settings() -> AppSettings:
         data=data_config,
         alerts=alert_config,
         debug=os.getenv("DEBUG", "False").lower() == "true",
-        log_level=os.getenv("LOG_LEVEL", "INFO")
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        startup_delay=int(os.getenv("STARTUP_DELAY", "10"))
     )
 
 # Singleton settings instance
