@@ -158,26 +158,17 @@ class Portfolio:
         self.updated_at = datetime.now()
     
     def add_position(self, position: Position) -> None:
-        """Add a position to the portfolio - FIXED for options matching"""
-        # Check if position already exists and update it
-        for i, existing_pos in enumerate(self.positions):
-            # For stocks: match symbol only
-            if existing_pos.position_type == PositionType.STOCK:
-                if existing_pos.symbol == position.symbol:
-                    self.positions[i] = position
-                    self.calculate_totals()
-                    return
-            # For options: match symbol, strike, expiry, and type
-            else:
-                if (existing_pos.symbol == position.symbol and 
-                    existing_pos.strike_price == position.strike_price and
-                    existing_pos.expiry == position.expiry and
-                    existing_pos.option_type == position.option_type):
-                    self.positions[i] = position
-                    self.calculate_totals()
-                    return
+        """Add a position to the portfolio - FIXED for proper position matching"""
         
-        # Add new position if no match found
+        # Find existing position with EXACT matching criteria
+        for i, existing_pos in enumerate(self.positions):
+            if self._positions_match(existing_pos, position):
+                # Update existing position instead of replacing
+                self._update_existing_position(existing_pos, position)
+                self.calculate_totals()
+                return
+        
+        # Add new position if no exact match found
         self.positions.append(position)
         self.calculate_totals()
     
@@ -224,6 +215,52 @@ class Portfolio:
             },
             'updated_at': self.updated_at.isoformat()
         }
+    
+    def _positions_match(self, pos1: Position, pos2: Position) -> bool:
+        """Check if two positions are the same - FIXED logic"""
+        
+        # Must have same symbol and account
+        if pos1.symbol != pos2.symbol or pos1.account_id != pos2.account_id:
+            return False
+        
+        # For stocks: symbol + account is enough
+        if pos1.position_type == PositionType.STOCK and pos2.position_type == PositionType.STOCK:
+            return True
+        
+        # For options: need symbol + strike + expiry + type + account
+        if (pos1.position_type in [PositionType.CALL, PositionType.PUT] and 
+            pos2.position_type in [PositionType.CALL, PositionType.PUT]):
+            return (pos1.strike_price == pos2.strike_price and
+                    pos1.expiry == pos2.expiry and
+                    pos1.option_type == pos2.option_type)
+        
+        # For futures: symbol + expiry + account
+        if (pos1.position_type == PositionType.FUTURE and 
+            pos2.position_type == PositionType.FUTURE):
+            return pos1.expiry == pos2.expiry
+        
+        # Different position types never match
+        return False
+    
+    def _update_existing_position(self, existing: Position, new: Position) -> None:
+        """Update existing position with new data"""
+        # Update key fields
+        existing.quantity = new.quantity
+        existing.avg_cost = new.avg_cost
+        existing.current_price = new.current_price
+        existing.market_value = new.market_value
+        existing.unrealized_pnl = new.unrealized_pnl
+        existing.realized_pnl = new.realized_pnl
+        
+        # Update Greeks if available
+        if new.greeks:
+            existing.greeks = new.greeks
+        
+        # Update timestamp
+        existing.updated_at = datetime.now()
+    
+
+
 
 @dataclass
 class PerformanceMetrics:

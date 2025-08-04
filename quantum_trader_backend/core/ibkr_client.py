@@ -85,7 +85,6 @@ class IBKRWrapper(EWrapper):
         
         # Update price data based on tick type
         tick_data = self.market_data[reqId]
-        idx2name = TickTypeEnum.idx2name
 
         if tickType == TickTypeEnum.LAST or tickType == TickTypeEnum.DELAYED_LAST:
             tick_data['last_price'] = price
@@ -133,32 +132,34 @@ class IBKRWrapper(EWrapper):
         })
     
     def tickOptionComputation(self, reqId: TickerId, tickType: int, 
-                             tickAttrib: int, impliedVol: float, delta: float, 
-                             optPrice: float, pvDividend: float, gamma: float, 
-                             vega: float, theta: float, undPrice: float):
-        """Receive option computation data (Greeks) - Fixed parameter signature"""
+                         tickAttrib: int, impliedVol: float, delta: float, 
+                         optPrice: float, pvDividend: float, gamma: float, 
+                         vega: float, theta: float, undPrice: float):
+        """Receive option computation data (Greeks) - FIXED"""
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
-        
-        # if tickType == TickTypeEnum.LAST_OPTION_COMPUTATION:
-        greeks_data = {
-            'symbol': symbol,
-            'req_id': reqId,
-            'implied_vol': impliedVol if impliedVol != -1 else 0,
-            'delta': delta if delta != -2 else 0,
-            'gamma': gamma if gamma != -2 else 0,
-            'vega': vega if vega != -2 else 0,
-            'theta': theta if theta != -2 else 0,
-            'option_price': optPrice if optPrice != -1 else 0,
-            'underlying_price': undPrice if undPrice != -1 else 0
-        }
-        print(f"Received option computation for {symbol} of {tickType}")
-        print(greeks_data)
-        input("Press Enter to continue...")
-        self._trigger_callbacks('market_data', {
-            'symbol': symbol,
-            'type': 'greeks',
-            'data': greeks_data
-        })
+        # Only process live option computation ticks
+        print(f"Received tickOptionComputation for {symbol} with tickType {tickType}")
+        print(f"Data: impliedVol={impliedVol}, delta={delta}, optPrice={optPrice}, undPrice={undPrice}")
+        print(f"tickAttrib: {tickAttrib}, gamma={gamma}, vega={vega}, theta={theta}")
+        if tickType in [10, 82]:  # Model option computation tick types
+            greeks_data = {
+                'symbol': symbol,
+                'req_id': reqId,
+                'implied_vol': impliedVol if impliedVol > 0 and impliedVol != -1 else 0,
+                'delta': delta if delta != -2 and abs(delta) <= 1 else 0,
+                'gamma': gamma if gamma != -2 and gamma >= 0 else 0,
+                'vega': vega if vega != -2 and vega >= 0 else 0,
+                'theta': theta if theta != -2 else 0,
+                'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0,
+                'underlying_price': undPrice if undPrice > 0 and undPrice != -1 else 0
+            }
+            self.logger.logger.info(f"Received Greeks for {symbol}: Delta={delta:.3f}, Gamma={gamma:.3f}")
+            
+            self._trigger_callbacks('market_data', {
+                'symbol': symbol,
+                'type': 'greeks',
+                'data': greeks_data
+            })
     
     # Portfolio and Account Events
     def updatePortfolio(self, contract: Contract, position: float, 
@@ -360,7 +361,7 @@ class IBKRClient(EClient):
             self.logger.market_data_event(symbol, "market_data_cancelled", {"req_id": req_id})
     
     def request_option_computation(self, symbol: str, contract: Contract) -> int:
-        """Request option Greeks computation"""
+        """Request option Greeks computation - FIXED"""
         if not self.ensure_connection():
             return -1
         
@@ -368,9 +369,11 @@ class IBKRClient(EClient):
         self.wrapper.req_id_to_symbol[req_id] = symbol
         self.wrapper.req_id_to_contract[req_id] = contract
         
-        # Request option computation data
-        self.reqMktData(req_id, contract, "100,101,104,105,106", True, False, [])
+        # Request live option computation data (NOT snapshot for Greeks)
+        # Use specific tick types for Greeks: 100,101,104,105,106
+        self.reqMktData(req_id, contract, "100,101,104,105,106", False, False, [])
         
+        self.logger.market_data_event(symbol, "greeks_requested", {"req_id": req_id})
         return req_id
     
     # Account and Portfolio Methods

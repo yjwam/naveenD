@@ -9,7 +9,7 @@ from utils.logger import get_logger
 from utils.calculations import OptionsCalculator, StrategyAnalyzer, time_to_expiry
 from core.ibkr_client import IBKRClient
 from core.data_manager import DataManager
-from models.portfolio import PositionType
+from models.portfolio import PositionType, Position
 from models.market_data import Greeks
 
 class OptionsService:
@@ -125,28 +125,63 @@ class OptionsService:
             self.logger.error(f"Error updating options positions: {e}")
     
     def _request_greeks_updates(self) -> None:
-        """Request Greeks updates for all options positions"""
+        """Request Greeks updates for all options positions - FIXED"""
         if not self.ibkr_client.ensure_connection():
             return
         
         try:
             for option_key, option_data in self.options_positions.items():
                 if option_key not in self.greeks_subscriptions:
-                    # Create option contract
-                    contract = self._create_option_contract(option_data)
+                    position = option_data['position']
+                    
+                    # Create proper option contract
+                    contract = self._create_proper_option_contract(position)
                     
                     if contract:
-                        # Request option computation (Greeks)
+                        # Request option computation (Greeks) - not market data
                         req_id = self.ibkr_client.request_option_computation(
-                            option_data['symbol'], contract
+                            position.symbol, contract
                         )
                         
                         if req_id != -1:
                             self.greeks_subscriptions[option_key] = req_id
-                            self.logger.debug(f"Requested Greeks for {option_key}")
-            
+                            self.logger.info(f"Requested Greeks for {option_key}")
+                            
+                            # Add delay between requests
+                            time.sleep(0.5)
+                
         except Exception as e:
             self.logger.error(f"Error requesting Greeks updates: {e}")
+
+    def _create_proper_option_contract(self, position: Position) -> Optional[Contract]:
+        """Create proper option contract for Greeks subscription - FIXED"""
+        try:
+            if position.position_type not in [PositionType.CALL, PositionType.PUT]:
+                return None
+            
+            # Format expiry for IBKR (remove slashes, ensure YYYYMMDD format)
+            expiry_formatted = position.expiry
+            if expiry_formatted and '/' in expiry_formatted:
+                # Convert MM/DD/YYYY to YYYYMMDD
+                parts = expiry_formatted.split('/')
+                if len(parts) == 3:
+                    expiry_formatted = f"{parts[2]}{parts[0].zfill(2)}{parts[1].zfill(2)}"
+            
+            contract = Contract()
+            contract.symbol = position.symbol
+            contract.secType = "OPT"
+            contract.exchange = "SMART"
+            contract.currency = "USD"
+            contract.lastTradeDateOrContractMonth = expiry_formatted
+            contract.strike = position.strike_price
+            contract.right = position.option_type  # 'C' or 'P'
+            contract.multiplier = "100"
+            
+            return contract
+            
+        except Exception as e:
+            self.logger.error(f"Error creating option contract for Greeks: {e}")
+            return None
     
     def _calculate_synthetic_greeks(self) -> None:
         """Calculate synthetic Greeks for positions without live data"""

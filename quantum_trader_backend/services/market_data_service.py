@@ -122,11 +122,10 @@ class MarketDataService:
         self.logger.info(f"Initial subscriptions completed: {len(self.subscribed_symbols)} successful")
     
     def _request_market_data_with_proper_ticks(self, symbol: str, contract: Contract) -> int:
-        """Request market data with appropriate tick list for security type"""
+        """Request market data with appropriate tick list for security type - FIXED"""
         if not self.ibkr_client.ensure_connection():
             return -1
         
-        # Skip if already failed before
         if symbol in self.failed_symbols:
             return -1
         
@@ -136,19 +135,24 @@ class MarketDataService:
         
         # Get appropriate tick list for security type
         sec_type = getattr(contract, 'secType', 'STK')
-        tick_list = self.tick_lists.get(sec_type, self.tick_lists['DEFAULT'])
         
         try:
-            # Request market data with appropriate tick list
-            self.ibkr_client.reqMktData(req_id, contract, "", True, False, [])
+            if sec_type == 'OPT':
+                # For options, request live data with Greeks (not snapshot)
+                self.ibkr_client.reqMktData(req_id, contract, "100,101,104,105,106", False, False, [])
+            else:
+                # For stocks/indices, use snapshot to avoid subscription fees
+                self.ibkr_client.reqMktData(req_id, contract, "", True, False, [])
+            
             self.logger.info(f"Market data requested for {symbol}", 
-                            req_id=req_id, sec_type=sec_type, tick_list=tick_list)
+                            req_id=req_id, sec_type=sec_type)
             return req_id
             
         except Exception as e:
             self.logger.error(f"Error requesting market data for {symbol}: {e}")
             self.failed_symbols.add(symbol)
             return -1
+
     
     def _check_new_subscriptions(self) -> None:
         """Check for new symbols that need market data subscriptions"""
