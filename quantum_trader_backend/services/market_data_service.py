@@ -93,16 +93,14 @@ class MarketDataService:
                         self._check_connection_health()
                         self.last_connection_check = current_time
                     
-                    # Check for new subscriptions needed (less frequently)
-                    if len(self.subscribed_symbols) < self.max_subscriptions_per_session:
-                        self._check_new_subscriptions()
+                    self._check_new_subscriptions()
                     
                     # Sleep longer to reduce CPU usage and avoid overwhelming IBKR
-                    time.sleep(10)  # 10 seconds instead of 5
+                    time.sleep(0.1)  # 10 seconds instead of 5
                     
                 except Exception as e:
                     self.logger.error(f"Error in market data service loop: {e}")
-                    time.sleep(30)  # Longer sleep on error
+                    time.sleep(3)  # Longer sleep on error
                     
         except Exception as e:
             self.logger.error(f"Fatal error in market data service: {e}")
@@ -128,7 +126,7 @@ class MarketDataService:
         self.logger.info("Setting up initial market data subscriptions...")
         
         # Wait a bit more after connection
-        time.sleep(5)
+        time.sleep(0.5)
         
         subscription_count = 0
         
@@ -151,7 +149,7 @@ class MarketDataService:
                     self.logger.info(f"Subscribed to market data for {symbol}")
                     
                     # Wait between subscriptions
-                    time.sleep(3)
+                    time.sleep(0.3)
                 else:
                     self.logger.warning(f"Failed to subscribe to {symbol}")
                     self.failed_symbols.add(symbol)
@@ -338,7 +336,7 @@ class MarketDataService:
         
         if symbol in self.subscribed_symbols:
             self.unsubscribe_from_symbol(symbol)
-            time.sleep(1)
+            time.sleep(0.1)
         
         return self.subscribe_to_symbol(symbol)
     
@@ -366,7 +364,7 @@ class MarketDataService:
             if self.subscribe_to_symbol(symbol):
                 successful += 1
             
-            time.sleep(2)  # Delay between retries
+            time.sleep(0.2)  # Delay between retries
             
             if not self._can_make_subscription():
                 break

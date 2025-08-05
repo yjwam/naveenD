@@ -89,7 +89,7 @@ class OptionsService:
                     self._check_expiration_alerts()
                     
                     # Sleep between checks
-                    time.sleep(1)
+                    time.sleep(0.1)
                     
                 except Exception as e:
                     self.logger.error(f"Error in options service loop: {e}")

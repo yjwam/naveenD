@@ -113,9 +113,7 @@ class IBKRWrapper(EWrapper):
         elif tickType in [TickTypeEnum.CLOSE, TickTypeEnum.DELAYED_CLOSE]:
             tick_data['close'] = price
 
-        # Trigger callback only if we have meaningful data
-        if any(key in tick_data for key in ['last_price', 'bid', 'ask']):
-            self._trigger_callbacks('market_data', {
+        self._trigger_callbacks('market_data', {
                 'symbol': symbol,
                 'req_id': reqId,
                 'tick_type': tickType,
@@ -338,7 +336,7 @@ class IBKRClient(EClient):
                 # Clean up any existing connection
                 if self.isConnected():
                     self.disconnect()
-                    time.sleep(2)
+                    time.sleep(0.2)
                 
                 self.logger.connection_event("attempting_connection", {
                     "host": settings.ibkr.host,

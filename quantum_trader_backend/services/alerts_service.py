@@ -75,11 +75,11 @@ class AlertsService:
                     self.last_alert_check = current_time
                     
                     # Sleep between checks
-                    time.sleep(10)  # Check every 10 seconds
+                    time.sleep(1)  # Check every 10 seconds
                     
                 except Exception as e:
                     self.logger.error(f"Error in alerts service loop: {e}")
-                    time.sleep(30)  # Longer sleep on error
+                    time.sleep(3)  # Longer sleep on error
                     
         except Exception as e:
             self.logger.error(f"Fatal error in alerts service: {e}")

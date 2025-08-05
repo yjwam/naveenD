@@ -10,7 +10,7 @@ class IBKRConfig:
     client_id: int = 1
     timeout: int = 30  # Increased from 10
     max_reconnect_attempts: int = 3  # Reduced from 5
-    reconnect_delay: int = 10  # Increased from 5
+    reconnect_delay: int = 1  # Increased from 5
     connection_check_interval: int = 30  # NEW: How often to check connection health
     request_delay: float = 1.0  # NEW: Delay between requests to avoid overwhelming
 
@@ -34,7 +34,7 @@ class DataConfig:
     history_retention_days: int = 30
     
     # NEW: Market data limits
-    max_market_data_subscriptions: int = 5  # Limit concurrent subscriptions
+    max_market_data_subscriptions: int = 50  # Limit concurrent subscriptions
     market_data_retry_limit: int = 3  # Max retries per symbol
     snapshot_mode: bool = True  # Use snapshots instead of streaming
 
@@ -72,8 +72,8 @@ class AppSettings:
     account_types: List[str] = None
     
     # NEW: Connection management
-    startup_delay: int = 10  # Wait time after connection before making requests
-    graceful_shutdown_timeout: int = 30  # Time to wait for graceful shutdown
+    startup_delay: int = 1  # Wait time after connection before making requests
+    graceful_shutdown_timeout: int = 10  # Time to wait for graceful shutdown
     
     def __post_init__(self):
         if self.market_indices is None:

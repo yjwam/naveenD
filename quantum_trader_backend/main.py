@@ -78,7 +78,7 @@ class QuantumTraderApplication:
             self._start_connection_monitoring()
             
             # Wait for everything to initialize
-            time.sleep(3)
+            time.sleep(0.3)
             
             self.running = True
             self.logger.info("QuantumTrader Elite started successfully!")
@@ -101,7 +101,7 @@ class QuantumTraderApplication:
             if self.ibkr_client.connect_and_run():
                 # Verify connection is stable
                 self.logger.info("Verifying connection stability...")
-                time.sleep(5)  # Wait to see if connection holds
+                time.sleep(0.5)  # Wait to see if connection holds
                 
                 if self.ibkr_client.is_connected():
                     self.logger.info("IBKR connection established and stable")
@@ -120,15 +120,15 @@ class QuantumTraderApplication:
         """Start services in proper sequence with delays - NEW"""
         # Start portfolio service first (fundamental data)
         self.portfolio_service.start()
-        time.sleep(2)
+        time.sleep(0.2)
         
         # Start market data service (rate-limited)
         self.market_data_service.start()
-        time.sleep(2)
+        time.sleep(0.2)
         
         # Start options service (depends on market data)
         self.options_service.start()
-        time.sleep(1)
+        time.sleep(0.1)
         
         # Start alerts service last
         self.alerts_service.start()
@@ -185,20 +185,20 @@ class QuantumTraderApplication:
         try:
             # Stop services in reverse order
             self.alerts_service.stop()
-            time.sleep(1)
+            time.sleep(0.1)
             
             self.options_service.stop()
-            time.sleep(1)
+            time.sleep(0.1)
             
             self.market_data_service.stop()
-            time.sleep(1)
+            time.sleep(0.1)
             
             self.portfolio_service.stop()
-            time.sleep(1)
+            time.sleep(0.1)
             
             # Stop WebSocket server
             self.websocket_manager.stop()
-            time.sleep(1)
+            time.sleep(0.1)
             
             # Disconnect from IBKR
             self.ibkr_client.disconnect_and_stop()
@@ -310,7 +310,7 @@ class QuantumTraderApplication:
         """Run the application indefinitely - IMPROVED"""
         try:
             while self.running:
-                time.sleep(1)
+                time.sleep(0.1)
                 
                 # Periodic status logging (every 5 minutes)
                 if int(time.time()) % 300 == 0:  # Every 5 minutes

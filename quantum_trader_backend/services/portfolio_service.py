@@ -82,11 +82,11 @@ class PortfolioService:
                     self._update_portfolio_calculations()
                     
                     # Sleep between checks
-                    time.sleep(1)
+                    time.sleep(0.1)
                     
                 except Exception as e:
                     self.logger.error(f"Error in portfolio service loop: {e}")
-                    time.sleep(5)
+                    time.sleep(0.5)
                     
         except Exception as e:
             self.logger.error(f"Fatal error in portfolio service: {e}")
@@ -106,7 +106,7 @@ class PortfolioService:
         for account_id in settings.account_types:
             self.add_account(account_id)
         
-        time.sleep(2)  # Allow initial data to flow
+        time.sleep(0.2)  # Allow initial data to flow
         
         # Initial requests
         self._request_positions_update()
