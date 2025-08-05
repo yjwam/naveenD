@@ -223,7 +223,7 @@ class MarketDataService:
                 break
         
         # Subscribe to new symbols (one at a time)
-        for symbol in list(position_symbols)[:1]:  # Only 1 new subscription per check
+        for symbol in list(position_symbols):  # Only 1 new subscription per check
             if self.subscribe_to_symbol(symbol):
                 break  # Only one per cycle
     

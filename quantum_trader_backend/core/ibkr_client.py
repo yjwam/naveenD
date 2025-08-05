@@ -435,9 +435,17 @@ class IBKRClient(EClient):
             self.wrapper.req_id_to_symbol[req_id] = symbol
             self.wrapper.req_id_to_contract[req_id] = contract
             
-            # Use minimal tick list and snapshots to avoid subscription issues
-            tick_list = ""  # Empty for basic data
-            
+            if contract.secType == "OPT":
+                snapshot = True
+                tick_list = ""
+            elif contract.secType == "STK":
+                tick_list = "100,101,105,106,221,225,232,233,236,258,623"  # Full tick list for stocks
+                snapshot = False
+            else:
+                # Use minimal tick list and snapshots to avoid subscription issues
+                tick_list = "100,101,104,105,106,107,165,221,225,233,236,258"  # Empty for basic data
+                snapshot = False
+
             self.reqMktData(req_id, contract, tick_list, snapshot, False, [])
             
             self.logger.market_data_event(symbol, "market_data_requested", {

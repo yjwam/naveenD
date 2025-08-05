@@ -28,7 +28,7 @@ class DataConfig:
     """Data management configuration - FIXED"""
     update_frequency: float = 2.0  # Increased from 1.0
     market_data_frequency: float = 5.0  # Increased from 0.1
-    greeks_update_frequency: float = 30.0  # Increased from 5.0
+    greeks_update_frequency: float = 1  # Increased from 5.0
     account_update_frequency: float = 60.0  # Increased from 30.0
     cache_size: int = 10000
     history_retention_days: int = 30
@@ -78,7 +78,7 @@ class AppSettings:
     def __post_init__(self):
         if self.market_indices is None:
             # Reduced list to avoid subscription issues
-            self.market_indices = ["SPY", "QQQ"]  # Removed VIX, TNX temporarily
+            self.market_indices = ["SPY", "QQQ","VIX","TNX","^IXIC","DX-Y.NYB","^TNX"]  # Removed VIX, TNX temporarily
             
         if self.account_types is None:
             self.account_types = ["DU123456", "DU789012"]  # Replace with actual account IDs
