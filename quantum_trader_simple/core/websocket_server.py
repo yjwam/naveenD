@@ -3,20 +3,18 @@ import json
 import websockets
 import threading
 from datetime import datetime
-from typing import Set, Dict, Any, Optional
+from typing import Set, Dict, Any
 from websockets.server import WebSocketServerProtocol
-
-from config.settings import settings
-from utils.logger import get_logger
-from core.data_manager import DataManager
-from models.dashboard import StreamingUpdate
+from config import Config
+from utils.logger import setup_logger, log_error
+from core.data_store import DataStore
 
 class WebSocketServer:
     """WebSocket server for real-time data streaming"""
     
-    def __init__(self, data_manager: DataManager):
-        self.data_manager = data_manager
-        self.logger = get_logger("websocket_server")
+    def __init__(self, data_store:DataStore):
+        self.data_store = data_store
+        self.logger = setup_logger('websocket_server')
         
         # Connected clients
         self.clients: Set[WebSocketServerProtocol] = set()
@@ -27,31 +25,23 @@ class WebSocketServer:
         self.running = False
         self.broadcast_task = None
         
-        # Update frequencies
-        self.update_interval = settings.data.update_frequency
-        
         self.logger.info("WebSocket server initialized")
     
-    async def connection_handler(self, websocket, path):
-        """Handle WebSocket connection with proper signature"""
-        return await self.register_client(websocket, path)
-    
-    async def register_client(self, websocket: WebSocketServerProtocol, path: str) -> None:
-        """Register a new client connection"""
+    async def register_client(self, websocket: WebSocketServerProtocol, path: str):
+        """Handle new client connection"""
         try:
             self.clients.add(websocket)
             self.client_info[websocket] = {
                 'connected_at': datetime.now(),
                 'path': path,
-                'remote_address': websocket.remote_address,
-                'last_ping': datetime.now()
+                'remote_address': websocket.remote_address
             }
             
             client_count = len(self.clients)
             self.logger.info(f"Client connected from {websocket.remote_address}. Total clients: {client_count}")
             
-            # Send initial dashboard data
-            await self.send_initial_data(websocket)
+            # Send initial data snapshot
+            await self.send_snapshot(websocket)
             
             # Handle client messages
             await self.handle_client_messages(websocket)
@@ -59,39 +49,38 @@ class WebSocketServer:
         except websockets.exceptions.ConnectionClosed:
             self.logger.info(f"Client {websocket.remote_address} disconnected")
         except Exception as e:
-            self.logger.error(f"Error handling client {websocket.remote_address}: {e}")
+            log_error(self.logger, e, f"Error handling client {websocket.remote_address}")
         finally:
             await self.unregister_client(websocket)
     
-    async def unregister_client(self, websocket: WebSocketServerProtocol) -> None:
-        """Unregister a client connection"""
+    async def unregister_client(self, websocket: WebSocketServerProtocol):
+        """Remove client connection"""
         if websocket in self.clients:
             self.clients.remove(websocket)
-            
+        
         if websocket in self.client_info:
             del self.client_info[websocket]
         
         client_count = len(self.clients)
         self.logger.info(f"Client disconnected. Total clients: {client_count}")
     
-    async def send_initial_data(self, websocket: WebSocketServerProtocol) -> None:
-        """Send initial dashboard data to newly connected client"""
+    async def send_snapshot(self, websocket: WebSocketServerProtocol):
+        """Send initial data snapshot to client"""
         try:
-            dashboard_data = self.data_manager.get_dashboard_data()
-            
+            snapshot = self.data_store.get_snapshot()
             message = {
-                'type': 'initial_data',
-                'data': dashboard_data.to_dict(),
+                'type': 'snapshot',
+                'data': snapshot,
                 'timestamp': datetime.now().isoformat()
             }
             
             await websocket.send(json.dumps(message))
-            self.logger.debug(f"Sent initial data to {websocket.remote_address}")
+            self.logger.debug(f"Sent snapshot to {websocket.remote_address}")
             
         except Exception as e:
-            self.logger.error(f"Error sending initial data: {e}")
+            log_error(self.logger, e, "Error sending snapshot")
     
-    async def handle_client_messages(self, websocket: WebSocketServerProtocol) -> None:
+    async def handle_client_messages(self, websocket: WebSocketServerProtocol):
         """Handle incoming messages from client"""
         try:
             async for message in websocket:
@@ -101,49 +90,33 @@ class WebSocketServer:
                 except json.JSONDecodeError:
                     await self.send_error(websocket, "Invalid JSON format")
                 except Exception as e:
-                    self.logger.error(f"Error processing client message: {e}")
+                    log_error(self.logger, e, "Error processing client message")
                     await self.send_error(websocket, "Error processing message")
-                    
         except websockets.exceptions.ConnectionClosed:
             pass
     
-    async def process_client_message(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
+    async def process_client_message(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]):
         """Process specific client message types"""
         message_type = data.get('type')
         
         if message_type == 'ping':
-            # Update last ping time
-            if websocket in self.client_info:
-                self.client_info[websocket]['last_ping'] = datetime.now()
-            
-            # Send pong response
             await websocket.send(json.dumps({
                 'type': 'pong',
                 'timestamp': datetime.now().isoformat()
             }))
-            
+        
+        elif message_type == 'get_snapshot':
+            await self.send_snapshot(websocket)
+        
         elif message_type == 'subscribe':
-            # Handle subscription requests
             symbols = data.get('symbols', [])
             await self.handle_subscription(websocket, symbols)
-            
-        elif message_type == 'get_dashboard':
-            # Send current dashboard data
-            await self.send_initial_data(websocket)
-            
-        elif message_type == 'acknowledge_alert':
-            # Acknowledge an alert
-            alert_id = data.get('alert_id')
-            if alert_id:
-                await self.acknowledge_alert(alert_id)
         
         else:
             await self.send_error(websocket, f"Unknown message type: {message_type}")
     
-    async def handle_subscription(self, websocket: WebSocketServerProtocol, symbols: list) -> None:
+    async def handle_subscription(self, websocket: WebSocketServerProtocol, symbols: list):
         """Handle symbol subscription requests"""
-        # For now, all clients get all data
-        # In the future, this could be used for selective data streaming
         response = {
             'type': 'subscription_confirmed',
             'symbols': symbols,
@@ -151,23 +124,7 @@ class WebSocketServer:
         }
         await websocket.send(json.dumps(response))
     
-    async def acknowledge_alert(self, alert_id: str) -> None:
-        """Acknowledge an alert"""
-        # Find and acknowledge the alert
-        for alert in self.data_manager.alerts:
-            if alert.id == alert_id:
-                alert.acknowledged = True
-                self.logger.info(f"Alert {alert_id} acknowledged")
-                
-                # Broadcast alert acknowledgment
-                await self.broadcast_update({
-                    'type': 'alert_acknowledged',
-                    'alert_id': alert_id,
-                    'timestamp': datetime.now().isoformat()
-                })
-                break
-    
-    async def send_error(self, websocket: WebSocketServerProtocol, error_message: str) -> None:
+    async def send_error(self, websocket: WebSocketServerProtocol, error_message: str):
         """Send error message to client"""
         try:
             error_response = {
@@ -177,32 +134,40 @@ class WebSocketServer:
             }
             await websocket.send(json.dumps(error_response))
         except Exception as e:
-            self.logger.error(f"Error sending error message: {e}")
+            log_error(self.logger, e, "Error sending error message")
     
-    async def broadcast_dashboard_update(self) -> None:
-        """Broadcast dashboard update to all connected clients"""
+    async def broadcast_update(self, update_data: Dict[str, Any]):
+        """Broadcast update to all clients"""
+        if not self.clients:
+            return
+        
+        message = {
+            'type': 'update',
+            'data': update_data,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        await self.broadcast_message(message)
+    
+    async def broadcast_snapshot(self):
+        """Broadcast full snapshot to all clients"""
         if not self.clients:
             return
         
         try:
-            dashboard_data = self.data_manager.get_dashboard_data()
-            
+            snapshot = self.data_store.get_snapshot()
             message = {
-                'type': 'dashboard_update',
-                'data': dashboard_data.to_dict(),
+                'type': 'snapshot',
+                'data': snapshot,
                 'timestamp': datetime.now().isoformat()
             }
             
             await self.broadcast_message(message)
             
         except Exception as e:
-            self.logger.error(f"Error broadcasting dashboard update: {e}")
+            log_error(self.logger, e, "Error broadcasting snapshot")
     
-    async def broadcast_update(self, update_data: Dict[str, Any]) -> None:
-        """Broadcast a specific update to all clients"""
-        await self.broadcast_message(update_data)
-    
-    async def broadcast_message(self, message: Dict[str, Any]) -> None:
+    async def broadcast_message(self, message: Dict[str, Any]):
         """Broadcast message to all connected clients"""
         if not self.clients:
             return
@@ -216,40 +181,38 @@ class WebSocketServer:
             except websockets.exceptions.ConnectionClosed:
                 disconnected_clients.append(client)
             except Exception as e:
-                self.logger.error(f"Error sending message to client: {e}")
+                log_error(self.logger, e, f"Error sending message to client")
                 disconnected_clients.append(client)
         
         # Clean up disconnected clients
         for client in disconnected_clients:
             await self.unregister_client(client)
     
-    async def periodic_broadcast(self) -> None:
-        """Periodic broadcast of dashboard updates"""
+    async def periodic_broadcast(self):
+        """Periodic broadcast of data snapshots"""
         while self.running:
             try:
-                await self.broadcast_dashboard_update()
-                await asyncio.sleep(self.update_interval)
+                await self.broadcast_snapshot()
+                await asyncio.sleep(Config.UPDATE_INTERVAL)
             except Exception as e:
-                self.logger.error(f"Error in periodic broadcast: {e}")
-                await asyncio.sleep(1)  # Short delay before retrying
+                log_error(self.logger, e, "Error in periodic broadcast")
+                await asyncio.sleep(1)
     
-    async def start_server(self) -> None:
+    async def start_server(self):
         """Start the WebSocket server"""
         try:
             self.running = True
             
-            # Start the WebSocket server
             self.server = await websockets.serve(
-                self.connection_handler,
-                settings.websocket.host,
-                settings.websocket.port,
-                ping_interval=settings.websocket.ping_interval,
-                ping_timeout=settings.websocket.ping_timeout,
-                max_size=1024*1024,  # 1MB max message size
-                compression=None  # Disable compression for better performance
+                self.register_client,
+                Config.WEBSOCKET_HOST,
+                Config.WEBSOCKET_PORT,
+                ping_interval=20,
+                ping_timeout=10,
+                max_size=1024*1024
             )
             
-            self.logger.info(f"WebSocket server started on {settings.websocket.host}:{settings.websocket.port}")
+            self.logger.info(f"WebSocket server started on {Config.WEBSOCKET_HOST}:{Config.WEBSOCKET_PORT}")
             
             # Start periodic broadcast task
             self.broadcast_task = asyncio.create_task(self.periodic_broadcast())
@@ -258,10 +221,10 @@ class WebSocketServer:
             await self.server.wait_closed()
             
         except Exception as e:
-            self.logger.error(f"Error starting WebSocket server: {e}")
+            log_error(self.logger, e, "Error starting WebSocket server")
             raise
     
-    async def stop_server(self) -> None:
+    async def stop_server(self):
         """Stop the WebSocket server"""
         self.running = False
         
@@ -287,17 +250,15 @@ class WebSocketServer:
         
         self.logger.info("WebSocket server stopped")
     
-    def get_server_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> Dict[str, Any]:
         """Get server statistics"""
         return {
             'connected_clients': len(self.clients),
             'running': self.running,
-            'update_interval': self.update_interval,
             'clients_info': [
                 {
                     'address': str(info['remote_address']),
                     'connected_at': info['connected_at'].isoformat(),
-                    'last_ping': info['last_ping'].isoformat(),
                     'path': info['path']
                 }
                 for info in self.client_info.values()
@@ -307,16 +268,16 @@ class WebSocketServer:
 class WebSocketManager:
     """Manager for WebSocket server with threading support"""
     
-    def __init__(self, data_manager: DataManager):
-        self.data_manager = data_manager
-        self.websocket_server = WebSocketServer(data_manager)
-        self.logger = get_logger("websocket_manager")
+    def __init__(self, data_store):
+        self.data_store = data_store
+        self.websocket_server = WebSocketServer(data_store)
+        self.logger = setup_logger('websocket_manager')
         
         self.server_thread = None
         self.loop = None
         self.running = False
     
-    def start(self) -> None:
+    def start(self):
         """Start WebSocket server in separate thread"""
         if self.running:
             self.logger.warning("WebSocket server already running")
@@ -328,7 +289,7 @@ class WebSocketManager:
         
         self.logger.info("WebSocket manager started")
     
-    def stop(self) -> None:
+    def stop(self):
         """Stop WebSocket server"""
         if not self.running:
             return
@@ -336,7 +297,6 @@ class WebSocketManager:
         self.running = False
         
         if self.loop and not self.loop.is_closed():
-            # Schedule server stop
             asyncio.run_coroutine_threadsafe(
                 self.websocket_server.stop_server(),
                 self.loop
@@ -347,7 +307,7 @@ class WebSocketManager:
         
         self.logger.info("WebSocket manager stopped")
     
-    def _run_server(self) -> None:
+    def _run_server(self):
         """Run WebSocket server in event loop"""
         try:
             self.loop = asyncio.new_event_loop()
@@ -356,12 +316,12 @@ class WebSocketManager:
             self.loop.run_until_complete(self.websocket_server.start_server())
             
         except Exception as e:
-            self.logger.error(f"WebSocket server error: {e}")
+            log_error(self.logger, e, "WebSocket server error")
         finally:
             if self.loop and not self.loop.is_closed():
                 self.loop.close()
     
-    def broadcast_update(self, update_type: str, data: Dict[str, Any]) -> None:
+    def broadcast_update(self, update_type: str, data: Dict[str, Any]):
         """Broadcast update to all clients (thread-safe)"""
         if not self.running or not self.loop:
             return
@@ -369,8 +329,7 @@ class WebSocketManager:
         try:
             update_message = {
                 'type': update_type,
-                'data': data,
-                'timestamp': datetime.now().isoformat()
+                'data': data
             }
             
             asyncio.run_coroutine_threadsafe(
@@ -379,7 +338,7 @@ class WebSocketManager:
             )
             
         except Exception as e:
-            self.logger.error(f"Error broadcasting update: {e}")
+            log_error(self.logger, e, "Error broadcasting update")
     
     def get_stats(self) -> Dict[str, Any]:
         """Get WebSocket server statistics"""
@@ -388,5 +347,5 @@ class WebSocketManager:
         
         return {
             'status': 'running',
-            'server_stats': self.websocket_server.get_server_stats()
+            'server_stats': self.websocket_server.get_stats()
         }
