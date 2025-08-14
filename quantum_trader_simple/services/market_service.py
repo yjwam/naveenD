@@ -194,7 +194,7 @@ class MarketService:
                 
                 option_key = f"{symbol}_{strike}_{expiry}_{right}"
                 if option_key not in self.subscribed_symbols:
-                    req_id = self._subscribe_to_symbol(option_key, option_contract)
+                    req_id = self._subscribe_to_option_symbol(option_key, option_contract)
                     
         except Exception as e:
             log_error(self.logger, e, f"Error subscribing to option Greeks for {position.get('symbol')}")
@@ -206,6 +206,25 @@ class MarketService:
                 return -1
             
             req_id = self.ibkr_client.request_market_data(symbol, contract, snapshot=True)
+            if req_id != -1:
+                self.subscribed_symbols.add(symbol)
+                self.symbol_to_req_id[symbol] = req_id
+                self.req_id_to_symbol[req_id] = symbol
+                self.logger.debug(f"Subscribed to market data for {symbol}")
+            
+            return req_id
+            
+        except Exception as e:
+            log_error(self.logger, e, f"Error subscribing to {symbol}")
+            return -1
+        
+    def _subscribe_to_option_symbol(self, symbol: str, contract) -> int:
+        """Subscribe to market data for a symbol"""
+        try:
+            if not self.ibkr_client.is_connected():
+                return -1
+            
+            req_id = self.ibkr_client.request_option_market_data(symbol, contract, snapshot=True)
             if req_id != -1:
                 self.subscribed_symbols.add(symbol)
                 self.symbol_to_req_id[symbol] = req_id

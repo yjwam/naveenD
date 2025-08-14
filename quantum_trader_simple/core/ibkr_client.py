@@ -299,6 +299,26 @@ class IBKRClient(EClient):
             log_error(self.logger, e, f"Error requesting market data for {symbol}")
             return -1
     
+    def request_option_market_data(self, symbol: str, contract: Contract, snapshot: bool = False) -> int:
+        if not self.is_connected():
+            return -1
+        
+        try:
+            req_id = self.get_next_req_id()
+            self.wrapper.req_id_to_symbol[req_id] = symbol
+            self.wrapper.symbol_to_req_id[symbol] = req_id
+
+            self.reqMarketDataType(3)
+            # self.reqMktData(req_id, contract, "", True, False, [])
+            
+            self.reqMktData(req_id, contract, "100,101,104,105,106", True, False, [])
+            time.sleep(5)
+            self.logger.debug(f"Requested market data for {symbol} (ReqId: {req_id})")
+            return req_id
+        except Exception as e:
+            log_error(self.logger, e, f"Error requesting market data for {symbol}")
+            return -1
+
     def cancel_market_data(self, req_id: int):
         try:
             if self.isConnected():
