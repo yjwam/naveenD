@@ -102,22 +102,21 @@ class MarketService:
     def _setup_etf_contracts(self):
         """Setup ETF contracts"""
         etf_mapping = {
-                'SPY': ('SPY', 'STK'),
-                'QQQ': ('QQQ', 'STK'), 
-                'VIX': ('VIX', 'IND'),
-                'DXY': ('DXY', 'IND'),
-                '^IXIC': ('COMP', 'IND'),  # NASDAQ Composite
-                '^TNX': ('TNX', 'IND')     # 10-Year Treasury
+                'SPY': ('SPY', 'STK', 'ARCA'),
+                'QQQ': ('QQQ', 'STK' ,'NASDAQ'), 
+                'VIX': ('VIX', 'IND', 'CBOE'),
+                '^IXIC': ('COMP', 'IND', 'NASDAQ'),  # NASDAQ Composite
+                '^TNX': ('TNX', 'IND', 'CBOE')     # 10-Year Treasury
             }
 
         try:
-            for symbol, (contract_symbol, sec_type) in etf_mapping.items():
+            for symbol, (contract_symbol, sec_type, exchange) in etf_mapping.items():
                 if sec_type == 'IND':
                     # Index
-                    contract = self.ibkr_client.create_index_contract(contract_symbol)
+                    contract = self.ibkr_client.create_index_contract(contract_symbol, exchange)
                 else:
                     # ETF/Stock
-                    contract = self.ibkr_client.create_stock_contract(symbol)
+                    contract = self.ibkr_client.create_stock_contract(contract_symbol)
                 
                 self.etf_contracts[symbol] = contract
                 
@@ -318,8 +317,17 @@ class MarketService:
         try:
             # Update ETF data
             etf_data = {}
-            for symbol in Config.ETFS:
-                market_data = self.market_data_cache.get(symbol, {})
+            etf_mapping = {
+                'SPY': ('SPY', 'STK'),
+                'QQQ': ('QQQ', 'STK'), 
+                'VIX': ('VIX', 'IND'),
+                'DXY': ('DXY', 'IND'),
+                '^IXIC': ('COMP', 'IND'),  # NASDAQ Composite
+                '^TNX': ('TNX', 'IND')     # 10-Year Treasury
+            }
+
+            for symbol,(new_symbol,sec) in etf_mapping.items():
+                market_data = self.market_data_cache.get(new_symbol, {})
                 if market_data:
                     etf_data[symbol] = {
                         'price': market_data.get('last_price', 0),
