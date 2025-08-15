@@ -102,7 +102,7 @@ class MarketService:
     def _setup_etf_contracts(self):
         """Setup ETF contracts"""
         etf_mapping = {
-                'SPY': ('SPY', 'STK', 'ARCA'),
+                'SPY': ('SPY', 'STK', 'MEXI'),
                 'QQQ': ('QQQ', 'STK' ,'NASDAQ'), 
                 'VIX': ('VIX', 'IND', 'CBOE'),
                 '^IXIC': ('COMP', 'IND', 'NASDAQ'),  # NASDAQ Composite

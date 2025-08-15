@@ -290,7 +290,7 @@ class IBKRClient(EClient):
             self.wrapper.req_id_to_symbol[req_id] = symbol
             self.wrapper.symbol_to_req_id[symbol] = req_id
 
-            self.reqMarketDataType(3)
+            self.reqMarketDataType(2)
             
             self.reqMktData(req_id, contract, "", snapshot, False, [])
             self.logger.debug(f"Requested market data for {symbol} (ReqId: {req_id})")
@@ -308,7 +308,7 @@ class IBKRClient(EClient):
             self.wrapper.req_id_to_symbol[req_id] = symbol
             self.wrapper.symbol_to_req_id[symbol] = req_id
 
-            self.reqMarketDataType(3)
+            self.reqMarketDataType(2)
             # self.reqMktData(req_id, contract, "", True, False, [])
             
             self.reqMktData(req_id, contract, "100,101,104,105,106", True, False, [])
