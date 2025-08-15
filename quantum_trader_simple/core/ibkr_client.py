@@ -137,7 +137,9 @@ class IBKRWrapper(EWrapper):
                              pvDividend: float, gamma: float, vega: float,
                              theta: float, undPrice: float):
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
-        
+
+        greeks_data = None
+
         if tickType in [TickTypeEnum.MODEL_OPTION, TickTypeEnum.DELAYED_MODEL_OPTION]:  # Model option computation
             greeks_data = {
                 'symbol': symbol,
@@ -149,7 +151,32 @@ class IBKRWrapper(EWrapper):
                 'theta': theta if theta != -2 else 0,
                 'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0
             }
-            
+        
+        if tickType in [TickTypeEnum.BID_OPTION_COMPUTATION, TickTypeEnum.DELAYED_BID_OPTION]:  # Model option computation
+            greeks_data = {
+                'symbol': symbol,
+                'req_id': reqId,
+                'implied_vol': impliedVol if impliedVol > 0 and impliedVol != -1 else 0,
+                'delta': delta if delta != -2 and abs(delta) <= 1 else 0,
+                'gamma': gamma if gamma != -2 and gamma >= 0 else 0,
+                'vega': vega if vega != -2 and vega >= 0 else 0,
+                'theta': theta if theta != -2 else 0,
+                'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0
+            }
+
+        if tickType in [TickTypeEnum.ASK_OPTION_COMPUTATION, TickTypeEnum.DELAYED_ASK_OPTION]:  # Model option computation
+            greeks_data = {
+                'symbol': symbol,
+                'req_id': reqId,
+                'implied_vol': impliedVol if impliedVol > 0 and impliedVol != -1 else 0,
+                'delta': delta if delta != -2 and abs(delta) <= 1 else 0,
+                'gamma': gamma if gamma != -2 and gamma >= 0 else 0,
+                'vega': vega if vega != -2 and vega >= 0 else 0,
+                'theta': theta if theta != -2 else 0,
+                'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0
+            }
+
+        if greeks_data:
             self._trigger_callbacks('market_data', {
                 'symbol': symbol,
                 'type': 'greeks',
@@ -290,7 +317,7 @@ class IBKRClient(EClient):
             self.wrapper.req_id_to_symbol[req_id] = symbol
             self.wrapper.symbol_to_req_id[symbol] = req_id
 
-            self.reqMarketDataType(2)
+            self.reqMarketDataType(4)
             
             self.reqMktData(req_id, contract, "", snapshot, False, [])
             self.logger.debug(f"Requested market data for {symbol} (ReqId: {req_id})")
@@ -308,7 +335,7 @@ class IBKRClient(EClient):
             self.wrapper.req_id_to_symbol[req_id] = symbol
             self.wrapper.symbol_to_req_id[symbol] = req_id
 
-            self.reqMarketDataType(2)
+            self.reqMarketDataType(3)
             # self.reqMktData(req_id, contract, "", True, False, [])
             
             self.reqMktData(req_id, contract, "100,101,104,105,106", True, False, [])

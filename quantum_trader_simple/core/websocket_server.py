@@ -27,7 +27,7 @@ class WebSocketServer:
         
         self.logger.info("WebSocket server initialized")
     
-    async def register_client(self, websocket: WebSocketServerProtocol, path: str):
+    async def register_client(self, websocket: WebSocketServerProtocol, path: str="/"):
         """Handle new client connection"""
         try:
             self.clients.add(websocket)
@@ -202,9 +202,10 @@ class WebSocketServer:
         """Start the WebSocket server"""
         try:
             self.running = True
-            
+            async def connection_handler(websocket):
+                await self.register_client(websocket)
             self.server = await websockets.serve(
-                self.register_client,
+                connection_handler,
                 Config.WEBSOCKET_HOST,
                 Config.WEBSOCKET_PORT,
                 ping_interval=20,
