@@ -319,7 +319,7 @@ class IBKRClient(EClient):
 
             self.reqMarketDataType(3)
             
-            self.reqMktData(req_id, contract, "", snapshot, False, [])
+            self.reqMktData(req_id, contract, "", True, False, [])
             self.logger.debug(f"Requested market data for {symbol} (ReqId: {req_id})")
             return req_id
         except Exception as e:
@@ -337,7 +337,7 @@ class IBKRClient(EClient):
             self.reqMarketDataType(1)
             # self.reqMktData(req_id, contract, "", True, False, [])
             
-            self.reqMktData(req_id, contract, "", True, False, [])
+            self.reqMktData(req_id, contract, "100,101,104,105,106", False, False, [])
             self.logger.debug(f"Requested market data for {symbol} (ReqId: {req_id})")
             return req_id
         except Exception as e:
