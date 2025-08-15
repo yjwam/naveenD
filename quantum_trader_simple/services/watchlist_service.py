@@ -342,21 +342,19 @@ class WatchlistService:
                 
                 # Subscribe to call option
                 call_key = f"{symbol}_{strike}_{expiry}_C"
-                if call_key not in self.option_subscriptions:
-                    req_id = self.ibkr_client.request_option_market_data(call_key, call_contract, snapshot=False)
-                    if req_id != -1:
-                        self.option_subscriptions.add(call_key)
-                        self.logger.debug(f"Subscribed to call option: {call_key}")
-                        time.sleep(0.5)
+                req_id = self.ibkr_client.request_option_market_data(call_key, call_contract, snapshot=False)
+                if req_id != -1:
+                    self.option_subscriptions.add(call_key)
+                    self.logger.debug(f"Subscribed to call option: {call_key}")
+                    time.sleep(0.5)
                 
                 # Subscribe to put option
                 put_key = f"{symbol}_{strike}_{expiry}_P"
-                if put_key not in self.option_subscriptions:
-                    req_id = self.ibkr_client.request_option_market_data(put_key, put_contract, snapshot=False)
-                    if req_id != -1:
-                        self.option_subscriptions.add(put_key)
-                        self.logger.debug(f"Subscribed to put option: {put_key}")
-                        time.sleep(0.5)
+                req_id = self.ibkr_client.request_option_market_data(put_key, put_contract, snapshot=False)
+                if req_id != -1:
+                    self.option_subscriptions.add(put_key)
+                    self.logger.debug(f"Subscribed to put option: {put_key}")
+                    time.sleep(0.5)
                         
         except Exception as e:
             log_error(self.logger, e, "Error subscribing to fixed options")
@@ -522,6 +520,9 @@ class WatchlistService:
             symbol_key = data.get('symbol', '')
             tick_data = data.get('data', {})
             
+            if symbol_key not in self.option_subscriptions:
+                return
+
             # Handle Greeks data
             if data.get('type') == 'greeks':
                 self._process_option_greeks(data)

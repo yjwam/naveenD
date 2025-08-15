@@ -250,6 +250,9 @@ class MarketService:
             req_id = data.get('req_id')
             tick_data = data.get('data', {})
 
+            if symbol not in self.subscribed_symbols:
+                return
+
             if data.get('type') == 'greeks':
                 self._process_greeks_data(data)
                 return
