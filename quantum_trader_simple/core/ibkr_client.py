@@ -26,6 +26,7 @@ class IBKRWrapper(EWrapper):
         
         # Data storage
         self.market_data = {}
+        self.greeks_data = {}
         self.positions_data = {}
         self.account_data = {}
         
@@ -88,7 +89,7 @@ class IBKRWrapper(EWrapper):
         
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
         tick_data = self.market_data[reqId]
-        
+
         if tickType in [TickTypeEnum.LAST, TickTypeEnum.DELAYED_LAST]:
             tick_data['last_price'] = price
         elif tickType in [TickTypeEnum.BID, TickTypeEnum.DELAYED_BID]:
@@ -101,7 +102,7 @@ class IBKRWrapper(EWrapper):
             tick_data['low'] = price
         elif tickType in [TickTypeEnum.CLOSE, TickTypeEnum.DELAYED_CLOSE]:
             tick_data['close'] = price
-        
+
         self._trigger_callbacks('market_data', {
             'symbol': symbol,
             'req_id': reqId,
@@ -137,46 +138,30 @@ class IBKRWrapper(EWrapper):
                              pvDividend: float, gamma: float, vega: float,
                              theta: float, undPrice: float):
         symbol = self.req_id_to_symbol.get(reqId, f"REQ_{reqId}")
+        if reqId not in self.greeks_data:
+            self.greeks_data[reqId] = {}
 
-        greeks_data = None
+        greeks_data = self.greeks_data[reqId]
+
+        greeks_data['symbol'] = symbol
+        greeks_data['req_id'] = reqId
 
         if tickType in [TickTypeEnum.MODEL_OPTION, TickTypeEnum.DELAYED_MODEL_OPTION]:  # Model option computation
-            greeks_data = {
-                'symbol': symbol,
-                'req_id': reqId,
-                'implied_vol': impliedVol if impliedVol > 0 and impliedVol != -1 else 0,
-                'delta': delta if delta != -2 and abs(delta) <= 1 else 0,
-                'gamma': gamma if gamma != -2 and gamma >= 0 else 0,
-                'vega': vega if vega != -2 and vega >= 0 else 0,
-                'theta': theta if theta != -2 else 0,
-                'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0
-            }
-        
-        if tickType in [TickTypeEnum.BID_OPTION_COMPUTATION, TickTypeEnum.DELAYED_BID_OPTION]:  # Model option computation
-            greeks_data = {
-                'symbol': symbol,
-                'req_id': reqId,
-                'implied_vol': impliedVol if impliedVol > 0 and impliedVol != -1 else 0,
-                'delta': delta if delta != -2 and abs(delta) <= 1 else 0,
-                'gamma': gamma if gamma != -2 and gamma >= 0 else 0,
-                'vega': vega if vega != -2 and vega >= 0 else 0,
-                'theta': theta if theta != -2 else 0,
-                'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0
-            }
+            if delta:
+                greeks_data['delta'] = delta
+            if gamma:
+                greeks_data['gamma'] = gamma
+            if vega:
+                greeks_data['vega'] = vega
+            if theta:
+                greeks_data['theta'] = theta
+            if impliedVol:
+                greeks_data['impliedVol'] = impliedVol
+            if optPrice:
+                greeks_data['optPrice'] = optPrice
 
-        if tickType in [TickTypeEnum.ASK_OPTION_COMPUTATION, TickTypeEnum.DELAYED_ASK_OPTION]:  # Model option computation
-            greeks_data = {
-                'symbol': symbol,
-                'req_id': reqId,
-                'implied_vol': impliedVol if impliedVol > 0 and impliedVol != -1 else 0,
-                'delta': delta if delta != -2 and abs(delta) <= 1 else 0,
-                'gamma': gamma if gamma != -2 and gamma >= 0 else 0,
-                'vega': vega if vega != -2 and vega >= 0 else 0,
-                'theta': theta if theta != -2 else 0,
-                'option_price': optPrice if optPrice > 0 and optPrice != -1 else 0
-            }
+            self.greeks_data[reqId] = greeks_data
 
-        if greeks_data:
             self._trigger_callbacks('market_data', {
                 'symbol': symbol,
                 'type': 'greeks',
@@ -220,6 +205,16 @@ class IBKRWrapper(EWrapper):
     def positionEnd(self):
         self.logger.info("Position data download completed")
     
+    def contractDetails(self, reqId: TickerId, contractDetails):
+        """Handle contract details response"""
+        self.logger.debug(f"Received contract details for ReqId {reqId}: {contractDetails}")
+
+    def contractDetailsEnd(self, reqId:int):
+        """This function is called once all contract details for a given
+        request are received. This helps to define the end of an option
+        chain."""
+        self.logger.debug(f"Contract details download completed for ReqId {reqId}")  
+
     # Error Handling
     def error(self, reqId: TickerId, errorCode: int, errorString: str, advancedOrderRejectJson: str = ""):
         info_codes = [2104, 2106, 2158, 2168]
@@ -308,6 +303,11 @@ class IBKRClient(EClient):
                 self.wrapper.connection_ready and 
                 self.isConnected())
     
+    def qualify_contract(self, contract: Contract):
+        """Qualify a contract to ensure it is valid"""
+        req_id = self.get_next_req_id()
+        self.reqContractDetails(req_id,contract)
+
     def request_market_data(self, symbol: str, contract: Contract, snapshot: bool = True) -> int:
         if not self.is_connected():
             return -1
@@ -329,17 +329,15 @@ class IBKRClient(EClient):
     def request_option_market_data(self, symbol: str, contract: Contract, snapshot: bool = False) -> int:
         if not self.is_connected():
             return -1
-        
         try:
             req_id = self.get_next_req_id()
             self.wrapper.req_id_to_symbol[req_id] = symbol
             self.wrapper.symbol_to_req_id[symbol] = req_id
 
-            self.reqMarketDataType(3)
+            self.reqMarketDataType(4)
             # self.reqMktData(req_id, contract, "", True, False, [])
             
-            self.reqMktData(req_id, contract, "100,101,104,105,106", True, False, [])
-            time.sleep(5)
+            self.reqMktData(req_id, contract, "", True, False, [])
             self.logger.debug(f"Requested market data for {symbol} (ReqId: {req_id})")
             return req_id
         except Exception as e:
@@ -385,7 +383,7 @@ class IBKRClient(EClient):
     @staticmethod
     def create_option_contract(symbol: str, expiry: str, strike: float,
                               right: str, exchange: str = "SMART",
-                              currency: str = "USD") -> Contract:
+                              currency: str = "USD",multiplier: str = "100") -> Contract:
         contract = Contract()
         contract.symbol = symbol
         contract.secType = "OPT"
@@ -394,7 +392,7 @@ class IBKRClient(EClient):
         contract.lastTradeDateOrContractMonth = expiry
         contract.strike = strike
         contract.right = right
-        contract.multiplier = "100"
+        contract.multiplier = multiplier
         return contract
     
     @staticmethod

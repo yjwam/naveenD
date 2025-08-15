@@ -27,11 +27,19 @@ class DataStore:
         """Update positions data"""
         with self._lock:
             try:
+                new_pos = []
                 for position in positions_data:
                     pos_id = position.get('id')
                     if pos_id:
-                        self.positions[pos_id] = position
-                
+                        new_pos.append(pos_id)
+                        if pos_id not in self.positions:
+                            self.positions[pos_id] = {}
+                        self.positions[pos_id].update(position)
+
+                removed_pos = set(self.positions.keys()) - set(new_pos)
+                for pos_id in removed_pos:
+                    del self.positions[pos_id]
+
                 self.last_update = datetime.now()
                 self.logger.info(f"Updated {len(positions_data)} positions")
             except Exception as e:
@@ -43,7 +51,9 @@ class DataStore:
             try:
                 pos_id = position_data.get('id')
                 if pos_id:
-                    self.positions[pos_id] = position_data
+                    if pos_id not in self.positions:
+                        self.positions[pos_id] = {}
+                    self.positions[pos_id].update(position_data)
                     self.last_update = datetime.now()
             except Exception as e:
                 log_error(self.logger, e, "Error updating single position")
@@ -54,7 +64,6 @@ class DataStore:
             try:
                 self.etfs.update(etf_data)
                 self.last_update = datetime.now()
-                self.logger.debug(f"Updated ETF data: {list(etf_data.keys())}")
             except Exception as e:
                 log_error(self.logger, e, "Error updating ETFs")
     

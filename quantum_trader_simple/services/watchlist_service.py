@@ -1,7 +1,8 @@
 import csv
 import threading
 import time
-from datetime import datetime
+import yfinance as yf
+from datetime import datetime, timedelta
 from typing import Dict, List, Set, Optional
 from config import Config
 from utils.logger import setup_logger, log_error
@@ -10,7 +11,7 @@ from core.data_store import DataStore
 from ibapi.contract import Contract, ContractDetails
 
 class WatchlistService:
-    """Service for managing options watchlist using IBKR option chains"""
+    """Service for managing options watchlist using yfinance for stock prices and IBKR for options"""
     
     def __init__(self, ibkr_client: IBKRClient, data_store: DataStore):
         self.ibkr_client = ibkr_client
@@ -31,8 +32,10 @@ class WatchlistService:
         self.option_chains = {}     # symbol -> option chain data
         self.option_contracts = {}  # symbol -> {strike_expiry_right: Contract}
         
+        # Fixed option selections (calculated once, then only price updates)
+        self.fixed_option_selections = {}  # symbol -> {strike, expiry, call_contract, put_contract}
+        
         # Subscription tracking
-        self.subscribed_symbols = set()
         self.option_subscriptions = set()
         
         # Request tracking for callbacks
@@ -41,13 +44,16 @@ class WatchlistService:
         self.next_req_id = 5000
         
         # Update timing
-        self.last_watchlist_update = datetime.min
         self.last_stock_update = datetime.min
+        self.last_option_update = datetime.min
+        
+        # yfinance tickers
+        self.yf_tickers = {}
         
         # Setup additional callbacks
         self._setup_contract_callbacks()
         
-        self.logger.info("Watchlist service initialized")
+        self.logger.info("Watchlist service initialized with yfinance for stock prices")
     
     def start(self):
         """Start the watchlist service"""
@@ -83,6 +89,9 @@ class WatchlistService:
             time.sleep(1)
             self._load_watchlist()
             
+            # Setup yfinance tickers
+            self._setup_yfinance_tickers()
+            
             # Get contract details for all symbols first
             self._request_contract_details()
             
@@ -95,31 +104,36 @@ class WatchlistService:
             # Wait for option chains to be received
             time.sleep(5)
             
-            # Subscribe to stock data
-            self._subscribe_to_stocks()
+            self._update_stock_data_yfinance()
+
+            # Calculate fixed option selections (ATM strike + farthest expiry)
+            self._calculate_fixed_option_selections()
+            
+            # Subscribe to option data for fixed selections
+            self._subscribe_to_fixed_options()
             
             while self.running:
                 try:
                     current_time = datetime.now()
                     
-                    # Update stock data periodically
-                    if (current_time - self.last_stock_update).total_seconds() >= 1:
-                        self._request_stock_data()
+                    # Update stock data from yfinance periodically (every 10 seconds)
+                    if (current_time - self.last_stock_update).total_seconds() >= 10:
+                        self._update_stock_data_yfinance()
                         self.last_stock_update = current_time
                     
-                    # Update watchlist options data
-                    if (current_time - self.last_watchlist_update).total_seconds() >= 1:
-                        self._update_watchlist_options()
-                        self.last_watchlist_update = current_time
+                    # Update option data (every 5 seconds)
+                    if (current_time - self.last_option_update).total_seconds() >= 5:
+                        self._request_option_data_updates()
+                        self.last_option_update = current_time
                     
                     # Update data store
                     self._update_watchlist_store()
                     
-                    time.sleep(1)  # Main loop interval
+                    time.sleep(2)  # Main loop interval
                     
                 except Exception as e:
                     log_error(self.logger, e, "Error in watchlist service loop")
-                    time.sleep(1)
+                    time.sleep(2)
                     
         except Exception as e:
             log_error(self.logger, e, "Fatal error in watchlist service")
@@ -157,6 +171,62 @@ class WatchlistService:
             # Fallback to default symbols
             self.watchlist_symbols = ['AAPL', 'MSFT', 'TSLA', 'GOOG']
             self.logger.info(f"Using fallback symbols: {self.watchlist_symbols}")
+    
+    def _setup_yfinance_tickers(self):
+        """Setup yfinance ticker objects"""
+        try:
+            for symbol in self.watchlist_symbols:
+                self.yf_tickers[symbol] = yf.Ticker(symbol)
+                self.stock_data[symbol] = {}
+            
+            self.logger.info(f"Setup yfinance tickers for {len(self.yf_tickers)} symbols")
+            
+        except Exception as e:
+            log_error(self.logger, e, "Error setting up yfinance tickers")
+    
+    def _update_stock_data_yfinance(self):
+        """Update stock data using yfinance"""
+        try:
+            for symbol in self.watchlist_symbols:
+                if symbol in self.yf_tickers:
+                    ticker = self.yf_tickers[symbol]
+                    
+                    # Get current price and basic info
+                    try:
+                        info = ticker.info
+                        hist = ticker.history(period="2d", interval="1m")
+                        
+                        if not hist.empty and info:
+                            current_price = hist['Close'].iloc[-1]
+                            previous_close = info.get('previousClose', current_price)
+                            
+                            # Calculate change
+                            change = current_price - previous_close
+                            change_pct = (change / previous_close) * 100 if previous_close > 0 else 0
+                            
+                            # Get additional data
+                            volume = hist['Volume'].iloc[-1] if not hist.empty else 0
+                            high = hist['High'].max() if not hist.empty else current_price
+                            low = hist['Low'].min() if not hist.empty else current_price
+                            self.logger.info(f"YF: Updating stock data for {symbol}: ${current_price:.2f} (Change: {change_pct:+.2f}%)")
+                            self.stock_data[symbol] = {
+                                'last_price': round(float(current_price), 2),
+                                'previous_close': round(float(previous_close), 2),
+                                'change': round(float(change), 2),
+                                'change_pct': round(float(change_pct), 2),
+                                'volume': int(volume),
+                                'high': round(float(high), 2),
+                                'low': round(float(low), 2),
+                                'last_update': datetime.now().isoformat()
+                            }
+                            
+                            self.logger.info(f"Updated stock data for {symbol}: ${current_price:.2f} ({change_pct:+.2f}%)")
+                            
+                    except Exception as e:
+                        self.logger.warning(f"Failed to get yfinance data for {symbol}: {e}")
+                        
+        except Exception as e:
+            log_error(self.logger, e, "Error updating stock data from yfinance")
     
     def _request_contract_details(self):
         """Request contract details to get contract IDs for symbols"""
@@ -212,161 +282,170 @@ class WatchlistService:
         except Exception as e:
             log_error(self.logger, e, "Error requesting option parameters")
     
-    def _subscribe_to_stocks(self):
-        """Subscribe to stock market data"""
+    def _calculate_fixed_option_selections(self):
+        """Calculate fixed option selections (ATM strike + farthest expiry) - done once"""
         try:
             for symbol in self.watchlist_symbols:
-                if symbol not in self.subscribed_symbols and symbol in self.symbol_contracts:
-                    contract = self.symbol_contracts[symbol]
-                    req_id = self.ibkr_client.request_market_data(symbol, contract, snapshot=False)
-                    
-                    if req_id != -1:
-                        self.subscribed_symbols.add(symbol)
-                        self.stock_data[symbol] = {}
-                        self.logger.debug(f"Subscribed to stock data for {symbol}")
+                if symbol in self.option_chains and symbol in self.stock_data:
+                    stock_price = self.stock_data[symbol].get('last_price', 0)
+                    if stock_price > 0:
+                        chain_data = self.option_chains[symbol]
+                        strikes = chain_data.get('strikes', [])
+                        expiries = chain_data.get('expirations', [])
                         
-                    time.sleep(0.5)  # Rate limiting
-                    
+                        if strikes and expiries:
+                            # Find ATM strike (closest to current stock price)
+                            atm_strike = min(strikes, key=lambda x: abs(x - stock_price))
+
+                            selected_expiry = sorted(expiries)[-1]
+                            
+                            # Create option contracts
+                            call_contract = self._create_option_contract(symbol, atm_strike, selected_expiry, 'C')
+                            put_contract = self._create_option_contract(symbol, atm_strike, selected_expiry, 'P')
+
+                            self.fixed_option_selections[symbol] = {
+                                'strike': atm_strike,
+                                'expiry': selected_expiry,
+                                'call_contract': call_contract,
+                                'put_contract': put_contract,
+                                'selected_at': datetime.now().isoformat(),
+                                'stock_price_at_selection': stock_price
+                            }
+                            
+                            self.logger.info(f"Fixed option selection for {symbol}: "
+                                            f"Strike=${atm_strike}, Expiry={selected_expiry}, "
+                                            f"Stock=${stock_price:.2f}")
+            
         except Exception as e:
-            log_error(self.logger, e, "Error subscribing to stocks")
+            log_error(self.logger, e, "Error calculating fixed option selections")
     
-    def _request_stock_data(self):
-        """Request fresh stock data"""
+    def _create_option_contract(self, symbol: str, strike: float, expiry: str, right: str) -> Contract:
+        """Create option contract"""
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "OPT"
+        contract.currency = "USD"
+        contract.exchange = "SMART"
+        contract.lastTradeDateOrContractMonth = expiry
+        contract.strike = strike
+        contract.right = right
+        return contract
+    
+    def _subscribe_to_fixed_options(self):
+        """Subscribe to option data for fixed selections"""
         try:
-            for symbol in self.watchlist_symbols:
-                if self.ibkr_client.is_connected() and symbol in self.symbol_contracts:
-                    contract = self.symbol_contracts[symbol]
-                    self.ibkr_client.request_market_data(symbol, contract, snapshot=True)
+            for symbol, selection in self.fixed_option_selections.items():
+                call_contract = selection['call_contract']
+                put_contract = selection['put_contract']
+                strike = selection['strike']
+                expiry = selection['expiry']
+                
+                # Subscribe to call option
+                call_key = f"{symbol}_{strike}_{expiry}_C"
+                if call_key not in self.option_subscriptions:
+                    req_id = self.ibkr_client.request_option_market_data(call_key, call_contract, snapshot=False)
+                    if req_id != -1:
+                        self.option_subscriptions.add(call_key)
+                        self.logger.debug(f"Subscribed to call option: {call_key}")
+                        time.sleep(0.5)
+                
+                # Subscribe to put option
+                put_key = f"{symbol}_{strike}_{expiry}_P"
+                if put_key not in self.option_subscriptions:
+                    req_id = self.ibkr_client.request_option_market_data(put_key, put_contract, snapshot=False)
+                    if req_id != -1:
+                        self.option_subscriptions.add(put_key)
+                        self.logger.debug(f"Subscribed to put option: {put_key}")
+                        time.sleep(0.5)
+                        
+        except Exception as e:
+            log_error(self.logger, e, "Error subscribing to fixed options")
+    
+    def _request_option_data_updates(self):
+        """Request fresh option data for fixed selections"""
+        try:
+            for symbol, selection in self.fixed_option_selections.items():
+                if self.ibkr_client.is_connected():
+                    call_contract = selection['call_contract']
+                    put_contract = selection['put_contract']
+                    strike = selection['strike']
+                    expiry = selection['expiry']
+                    
+                    # Request call option data
+                    call_key = f"{symbol}_{strike}_{expiry}_C"
+                    self.ibkr_client.request_option_market_data(call_key, call_contract, snapshot=True)
+                    time.sleep(0.3)
+                    
+                    # Request put option data
+                    put_key = f"{symbol}_{strike}_{expiry}_P"
+                    self.ibkr_client.request_option_market_data(put_key, put_contract, snapshot=True)
                     time.sleep(0.3)
                     
         except Exception as e:
-            log_error(self.logger, e, "Error requesting stock data")
+            log_error(self.logger, e, "Error requesting option data updates")
     
-    def _update_watchlist_options(self):
-        """Update options data for watchlist symbols"""
+    def _update_watchlist_store(self):
+        """Update watchlist data in data store"""
         try:
+            updated_watchlist = {}
+            
             for symbol in self.watchlist_symbols:
-                stock_price = self.stock_data.get(symbol, {}).get('last_price', 0)
-                if symbol in self.option_chains:
-                    # Get ATM options from IBKR option chain data
-                    call_option, put_option = self._get_atm_options_from_chain(symbol, stock_price)
+                stock_data = self.stock_data.get(symbol, {})
+                selection = self.fixed_option_selections.get(symbol, {})
+                
+                if stock_data and selection:
+                    # Get option data from current watchlist_data (updated by market data callbacks)
+                    existing_data = self.watchlist_data.get(symbol, {})
+                    options_data = existing_data.get('options', {})
                     
-                    if call_option or put_option:
-                        self.watchlist_data[symbol] = {
-                            'stock_price': stock_price,
-                            'stock_change': self.stock_data.get(symbol, {}).get('change', 0),
-                            'stock_change_pct': self.stock_data.get(symbol, {}).get('change_pct', 0),
-                            'options': {
-                                'call': call_option,
-                                'put': put_option
-                            },
-                            'last_update': datetime.now().isoformat()
-                        }
-                        
-                        self.logger.debug(f"Updated watchlist data for {symbol}")
-                    
-                    time.sleep(1)  # Rate limiting
-                    
+                    updated_watchlist[symbol] = {
+                        'stock_price': stock_data.get('last_price', 0),
+                        'stock_change': stock_data.get('change', 0),
+                        'stock_change_pct': stock_data.get('change_pct', 0),
+                        'volume': stock_data.get('volume', 0),
+                        'high': stock_data.get('high', 0),
+                        'low': stock_data.get('low', 0),
+                        'previous_close': stock_data.get('previous_close', 0),
+                        'options': {
+                            'call': options_data.get('call', self._create_empty_option_data(selection, 'C')),
+                            'put': options_data.get('put', self._create_empty_option_data(selection, 'P'))
+                        },
+                        'fixed_selection': {
+                            'strike': selection.get('strike', 0),
+                            'expiry': selection.get('expiry', ''),
+                            'selected_at': selection.get('selected_at', ''),
+                            'stock_price_at_selection': selection.get('stock_price_at_selection', 0)
+                        },
+                        'last_update': datetime.now().isoformat()
+                    }
+            
+            if updated_watchlist:
+                self.data_store.update_watchlist(updated_watchlist)
+                
         except Exception as e:
-            log_error(self.logger, e, "Error updating watchlist options")
+            log_error(self.logger, e, "Error updating watchlist store")
     
-    def _get_atm_options_from_chain(self, symbol: str, stock_price: float) -> tuple:
-        """Get ATM call and put options from IBKR option chain"""
-        try:
-            chain_data = self.option_chains.get(symbol, {})
-            if not chain_data:
-                return None, None
-            
-            # Get strikes and find closest to current price
-            strikes = chain_data.get('strikes', [])
-            if not strikes:
-                return None, None
-            
-            # Find ATM strike (closest to stock price)
-            atm_strike = min(strikes, key=lambda x: abs(x - stock_price))
-            
-            # Get farthest expiry
-            expiries = chain_data.get('expirations', [])
-            if not expiries:
-                return None, None
-            
-            # Sort expiries and get the farthest one
-            expiries_sorted = sorted(expiries)
-            farthest_expiry = expiries_sorted[-1] if expiries_sorted else None
-            
-            if not farthest_expiry:
-                return None, None
-            
-            # Get call and put option data
-            call_option = self._get_option_data(symbol, atm_strike, farthest_expiry, 'C')
-            put_option = self._get_option_data(symbol, atm_strike, farthest_expiry, 'P')
-            
-            self.logger.debug(f"Selected ATM options for {symbol}: Strike={atm_strike}, Expiry={farthest_expiry}")
-            
-            return call_option, put_option
-            
-        except Exception as e:
-            log_error(self.logger, e, f"Error getting ATM options from chain for {symbol}")
-            return None, None
-    
-    def _get_option_data(self, symbol: str, strike: float, expiry: str, right: str) -> Optional[Dict]:
-        """Get option data for specific contract"""
-        try:
-            option_key = f"{symbol}_{strike}_{expiry}_{right}"
-            
-            # Create option contract using the base contract
-            if symbol not in self.symbol_contracts:
-                return None
-            
-            base_contract = self.symbol_contracts[symbol]
-            
-            option_contract = Contract()
-            option_contract.symbol = symbol
-            option_contract.secType = "OPT"
-            option_contract.currency = "USD"
-            option_contract.exchange = "SMART"
-            option_contract.lastTradeDateOrContractMonth = expiry
-            option_contract.strike = strike
-            option_contract.right = right
-            option_contract.multiplier = "100"
-            
-            # Store the option contract
-            if symbol not in self.option_contracts:
-                self.option_contracts[symbol] = {}
-            self.option_contracts[symbol][f"{strike}_{expiry}_{right}"] = option_contract
-            
-            # Request option data if not already subscribed
-            if option_key not in self.option_subscriptions:
-                req_id = self.ibkr_client.request_market_data(option_key, option_contract, snapshot=True)
-                if req_id != -1:
-                    self.option_subscriptions.add(option_key)
-                    self.logger.debug(f"Subscribed to option data: {option_key}")
-                    time.sleep(0.5)
-            
-            # Return option data structure (will be populated by market data callback)
-            return {
-                'strike': strike,
-                'expiry': expiry,
-                'right': right,
-                'price': 0,
-                'change': 0,
-                'change_pct': 0,
-                'volume': 0,
-                'bid': 0,
-                'ask': 0,
-                'greeks': {
-                    'delta': 0,
-                    'gamma': 0,
-                    'theta': 0,
-                    'vega': 0,
-                    'iv': 0
-                },
-                'last_update': datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            log_error(self.logger, e, f"Error getting option data for {symbol} {strike} {expiry} {right}")
-            return None
+    def _create_empty_option_data(self, selection: Dict, right: str) -> Dict:
+        """Create empty option data structure"""
+        return {
+            'strike': selection.get('strike', 0),
+            'expiry': selection.get('expiry', ''),
+            'right': right,
+            'price': 0,
+            'change': 0,
+            'change_pct': 0,
+            'volume': 0,
+            'bid': 0,
+            'ask': 0,
+            'greeks': {
+                'delta': 0,
+                'gamma': 0,
+                'theta': 0,
+                'vega': 0,
+                'iv': 0
+            },
+            'last_update': datetime.now().isoformat()
+        }
     
     # IBKR Callback Methods
     def _on_contract_details(self, req_id: int, contract_details: ContractDetails):
@@ -438,9 +517,9 @@ class WatchlistService:
             log_error(self.logger, e, f"Error handling option parameters end for req_id {req_id}")
     
     def _on_market_data_update(self, data: Dict):
-        """Handle market data update from IBKR"""
+        """Handle market data update from IBKR (only for options)"""
         try:
-            symbol = data.get('symbol', '')
+            symbol_key = data.get('symbol', '')
             tick_data = data.get('data', {})
             
             # Handle Greeks data
@@ -448,17 +527,9 @@ class WatchlistService:
                 self._process_option_greeks(data)
                 return
             
-            # Handle stock data
-            if symbol in self.watchlist_symbols:
-                if symbol not in self.stock_data:
-                    self.stock_data[symbol] = {}
-                
-                self.stock_data[symbol].update(tick_data)
-                self._calculate_stock_changes(symbol)
-                
-            # Handle option data
-            elif '_' in symbol and any(ws in symbol for ws in self.watchlist_symbols):
-                self._process_option_data(symbol, tick_data)
+            # Handle option data (ignore stock data since we use yfinance)
+            if '_' in symbol_key and any(ws in symbol_key for ws in self.watchlist_symbols):
+                self._process_option_data(symbol_key, tick_data)
                 
         except Exception as e:
             log_error(self.logger, e, "Error processing watchlist market data")
@@ -473,23 +544,28 @@ class WatchlistService:
                 parts = symbol_key.split('_')
                 if len(parts) >= 4:
                     base_symbol = parts[0]
+                    strike = float(parts[1])
+                    expiry = parts[2]
+                    right = parts[3]
                     
                     if base_symbol in self.watchlist_data:
-                        # Find matching option and update Greeks
-                        watchlist_item = self.watchlist_data[base_symbol]
+                        option_type = 'call' if right == 'C' else 'put'
                         
-                        for option_type in ['call', 'put']:
-                            option = watchlist_item['options'].get(option_type)
-                            if option and self._matches_option(option, parts):
-                                option['greeks'] = {
-                                    'delta': round(greeks_data.get('delta', 0), 4),
-                                    'gamma': round(greeks_data.get('gamma', 0), 4),
-                                    'theta': round(greeks_data.get('theta', 0), 4),
-                                    'vega': round(greeks_data.get('vega', 0), 4),
-                                    'iv': round(greeks_data.get('implied_vol', 0), 4)
-                                }
-                                break
-                                
+                        if base_symbol not in self.watchlist_data:
+                            self.watchlist_data[base_symbol] = {'options': {}}
+                        if 'options' not in self.watchlist_data[base_symbol]:
+                            self.watchlist_data[base_symbol]['options'] = {}
+                        if option_type not in self.watchlist_data[base_symbol]['options']:
+                            self.watchlist_data[base_symbol]['options'][option_type] = {}
+                        
+                        self.watchlist_data[base_symbol]['options'][option_type]['greeks'] = {
+                            'delta': round(greeks_data.get('delta', 0), 4),
+                            'gamma': round(greeks_data.get('gamma', 0), 4),
+                            'theta': round(greeks_data.get('theta', 0), 4),
+                            'vega': round(greeks_data.get('vega', 0), 4),
+                            'iv': round(greeks_data.get('implied_vol', 0), 4)
+                        }
+                        
         except Exception as e:
             log_error(self.logger, e, "Error processing option Greeks")
     
@@ -499,76 +575,49 @@ class WatchlistService:
             parts = option_key.split('_')
             if len(parts) >= 4:
                 base_symbol = parts[0]
+                strike = float(parts[1])
+                expiry = parts[2]
+                right = parts[3]
                 
-                if base_symbol in self.watchlist_data:
-                    watchlist_item = self.watchlist_data[base_symbol]
+                option_type = 'call' if right == 'C' else 'put'
+                
+                if base_symbol not in self.watchlist_data:
+                    self.watchlist_data[base_symbol] = {'options': {}}
+                if 'options' not in self.watchlist_data[base_symbol]:
+                    self.watchlist_data[base_symbol]['options'] = {}
+                if option_type not in self.watchlist_data[base_symbol]['options']:
+                    self.watchlist_data[base_symbol]['options'][option_type] = {
+                        'strike': strike,
+                        'expiry': expiry,
+                        'right': right,
+                        'greeks': {}
+                    }
+                
+                option_data = self.watchlist_data[base_symbol]['options'][option_type]
+                
+                # Update option price data
+                old_price = option_data.get('price', 0)
+                new_price = tick_data.get('last_price', 0)
+                
+                if new_price > 0:
+                    option_data['price'] = round(new_price, 2)
+                    option_data['volume'] = tick_data.get('volume', 0)
+                    option_data['bid'] = round(tick_data.get('bid', 0), 2)
+                    option_data['ask'] = round(tick_data.get('ask', 0), 2)
                     
-                    for option_type in ['call', 'put']:
-                        option = watchlist_item['options'].get(option_type)
-                        if option and self._matches_option(option, parts):
-                            # Update option price data
-                            old_price = option.get('price', 0)
-                            new_price = tick_data.get('last_price', 0)
-                            
-                            if new_price > 0:
-                                option['price'] = round(new_price, 2)
-                                option['volume'] = tick_data.get('volume', 0)
-                                option['bid'] = round(tick_data.get('bid', 0), 2)
-                                option['ask'] = round(tick_data.get('ask', 0), 2)
-                                
-                                # Calculate change
-                                if old_price > 0:
-                                    change = new_price - old_price
-                                    change_pct = (change / old_price) * 100
-                                    option['change'] = round(change, 2)
-                                    option['change_pct'] = round(change_pct, 2)
-                                
-                                option['last_update'] = datetime.now().isoformat()
-                            break
+                    # Calculate change
+                    if old_price > 0:
+                        change = new_price - old_price
+                        change_pct = (change / old_price) * 100
+                        option_data['change'] = round(change, 2)
+                        option_data['change_pct'] = round(change_pct, 2)
+                    
+                    option_data['last_update'] = datetime.now().isoformat()
+                    
+                    self.logger.debug(f"Updated option data for {option_key}: ${new_price:.2f}")
                             
         except Exception as e:
             log_error(self.logger, e, f"Error processing option data for {option_key}")
-    
-    def _matches_option(self, option: Dict, key_parts: List[str]) -> bool:
-        """Check if option matches key parts"""
-        try:
-            if len(key_parts) >= 4:
-                strike = float(key_parts[1])
-                expiry = key_parts[2]
-                right = key_parts[3]
-                
-                return (option.get('strike') == strike and
-                        option.get('expiry') == expiry and
-                        option.get('right') == right)
-        except:
-            pass
-        return False
-    
-    def _calculate_stock_changes(self, symbol: str):
-        """Calculate stock price changes"""
-        try:
-            data = self.stock_data.get(symbol, {})
-            current_price = data.get('last_price', 0)
-            close_price = data.get('close', 0)
-            
-            if current_price > 0 and close_price > 0:
-                change = current_price - close_price
-                change_pct = (change / close_price) * 100
-                
-                data['change'] = round(change, 2)
-                data['change_pct'] = round(change_pct, 2)
-                
-        except Exception as e:
-            log_error(self.logger, e, f"Error calculating stock changes for {symbol}")
-    
-    def _update_watchlist_store(self):
-        """Update watchlist data in data store"""
-        try:
-            if self.watchlist_data:
-                self.data_store.update_watchlist(self.watchlist_data)
-                
-        except Exception as e:
-            log_error(self.logger, e, "Error updating watchlist store")
     
     def _get_next_req_id(self) -> int:
         """Get next request ID"""
@@ -585,12 +634,46 @@ class WatchlistService:
         """Get option chain data"""
         return self.option_chains.copy()
     
+    def get_fixed_selections(self) -> Dict:
+        """Get fixed option selections"""
+        return self.fixed_option_selections.copy()
+    
+    def recalculate_option_selections(self, symbol: str = None):
+        """Recalculate option selections for symbol(s) - use sparingly"""
+        try:
+            symbols_to_update = [symbol] if symbol else self.watchlist_symbols
+            
+            for sym in symbols_to_update:
+                if sym in self.option_chains and sym in self.stock_data:
+                    # Cancel existing subscriptions for this symbol
+                    for option_key in list(self.option_subscriptions):
+                        if option_key.startswith(f"{sym}_"):
+                            self.option_subscriptions.discard(option_key)
+                    
+                    # Remove old selection
+                    self.fixed_option_selections.pop(sym, None)
+                    
+            # Recalculate selections
+            self._calculate_fixed_option_selections()
+            
+            # Re-subscribe to new selections
+            self._subscribe_to_fixed_options()
+            
+            self.logger.info(f"Recalculated option selections for: {symbols_to_update}")
+            
+        except Exception as e:
+            log_error(self.logger, e, f"Error recalculating option selections")
+    
     def add_symbol(self, symbol: str):
         """Add symbol to watchlist"""
         try:
             symbol = symbol.upper()
             if symbol not in self.watchlist_symbols:
                 self.watchlist_symbols.append(symbol)
+                
+                # Setup yfinance ticker
+                self.yf_tickers[symbol] = yf.Ticker(symbol)
+                self.stock_data[symbol] = {}
                 
                 # Request contract details first
                 req_id = self._get_next_req_id()
@@ -615,12 +698,19 @@ class WatchlistService:
             symbol = symbol.upper()
             if symbol in self.watchlist_symbols:
                 self.watchlist_symbols.remove(symbol)
-                self.subscribed_symbols.discard(symbol)
+                
+                # Clean up data
                 self.stock_data.pop(symbol, None)
                 self.watchlist_data.pop(symbol, None)
                 self.symbol_contracts.pop(symbol, None)
                 self.option_chains.pop(symbol, None)
-                self.option_contracts.pop(symbol, None)
+                self.fixed_option_selections.pop(symbol, None)
+                self.yf_tickers.pop(symbol, None)
+                
+                # Remove option subscriptions
+                for option_key in list(self.option_subscriptions):
+                    if option_key.startswith(f"{symbol}_"):
+                        self.option_subscriptions.discard(option_key)
                 
                 self.logger.info(f"Removed {symbol} from watchlist")
                 
@@ -638,9 +728,11 @@ class WatchlistService:
             'symbols': self.watchlist_symbols,
             'contracts_count': len(self.symbol_contracts),
             'option_chains_count': len(self.option_chains),
-            'subscribed_symbols': len(self.subscribed_symbols),
+            'fixed_selections_count': len(self.fixed_option_selections),
             'option_subscriptions': len(self.option_subscriptions),
+            'yf_tickers_count': len(self.yf_tickers),
             'watchlist_data_count': len(self.watchlist_data),
-            'last_update': self.last_watchlist_update.isoformat(),
+            'last_stock_update': self.last_stock_update.isoformat(),
+            'last_option_update': self.last_option_update.isoformat(),
             'running': self.is_running()
         }

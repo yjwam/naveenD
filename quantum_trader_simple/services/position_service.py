@@ -194,7 +194,7 @@ class PositionService:
                     'strike': float(contract.strike) if hasattr(contract, 'strike') else 0,
                     'expiry': self._format_expiry(contract.lastTradeDateOrContractMonth) if hasattr(contract, 'lastTradeDateOrContractMonth') else '',
                     'right': contract.right if hasattr(contract, 'right') else '',
-                    'exchange': contract.exchange,
+                    'exchange': contract.primaryExchange,
                     'multiplier': contract.multiplier if hasattr(contract, 'multiplier') else '100'
                 }
                 position['greeks'] = {}  # Will be populated by market service

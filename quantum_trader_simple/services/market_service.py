@@ -84,6 +84,7 @@ class MarketService:
                     
                     # Subscribe to position symbols
                     self._subscribe_to_position_symbols()
+                    time.sleep(Config.MARKET_DATA_INTERVAL//2)
                     
                     # Update market data in data store
                     self._update_market_data_store()
@@ -102,7 +103,7 @@ class MarketService:
     def _setup_etf_contracts(self):
         """Setup ETF contracts"""
         etf_mapping = {
-                'SPY': ('SPY', 'STK', 'MEXI'),
+                'SPY': ('SPY', 'STK', 'SMART'),
                 'QQQ': ('QQQ', 'STK' ,'NASDAQ'), 
                 'VIX': ('VIX', 'IND', 'CBOE'),
                 '^IXIC': ('COMP', 'IND', 'NASDAQ'),  # NASDAQ Composite
@@ -155,19 +156,25 @@ class MarketService:
         """Subscribe to market data for position symbols"""
         try:
             positions = self.data_store.get_positions()
-            
+
             for position in positions:
                 symbol = position.get('symbol')
-                if symbol and symbol not in self.subscribed_symbols:
-                    contract = self.ibkr_client.create_stock_contract(symbol)
-                    req_id = self._subscribe_to_symbol(symbol, contract)
-                    
+
+                if position.get('position_type') in ['call', 'put']:
+                    contract_details = position.get('contract_details', {})
+                    strike = contract_details.get('strike')
+                    expiry = contract_details.get('expiry', '').replace('-', '')
+                    right = contract_details.get('right')
+                    symbol = f"{symbol}_{strike}_{expiry}_{right}"
+
+                if symbol:
                     # For options, also request Greeks
                     if position.get('position_type') in ['call', 'put']:
                         self._subscribe_to_option_greeks(position)
-                    
-                    time.sleep(0.2)  # Rate limiting
-                    
+                    else:
+                        contract = self.ibkr_client.create_stock_contract(symbol)
+                        req_id = self._subscribe_to_symbol(symbol, contract) 
+
         except Exception as e:
             log_error(self.logger, e, "Error subscribing to position symbols")
     
@@ -177,23 +184,23 @@ class MarketService:
             contract_details = position.get('contract_details', {})
             if not contract_details:
                 return
-            
             symbol = position['symbol']
             strike = contract_details.get('strike')
             expiry = contract_details.get('expiry', '').replace('-', '')
             right = contract_details.get('right')
-            
+            multiplier = contract_details.get('multiplier', '100')
+
             if strike and expiry and right:
                 option_contract = self.ibkr_client.create_option_contract(
                     symbol=symbol,
                     expiry=expiry,
                     strike=strike,
-                    right=right
+                    right=right,
+                    multiplier=multiplier,
+                    exchange=position.get('exchange', 'SMART')
                 )
-                
                 option_key = f"{symbol}_{strike}_{expiry}_{right}"
-                if option_key not in self.subscribed_symbols:
-                    req_id = self._subscribe_to_option_symbol(option_key, option_contract)
+                req_id = self._subscribe_to_option_symbol(option_key, option_contract)
                     
         except Exception as e:
             log_error(self.logger, e, f"Error subscribing to option Greeks for {position.get('symbol')}")
@@ -242,7 +249,7 @@ class MarketService:
             symbol = data.get('symbol')
             req_id = data.get('req_id')
             tick_data = data.get('data', {})
-            
+
             if data.get('type') == 'greeks':
                 self._process_greeks_data(data)
                 return
@@ -327,7 +334,7 @@ class MarketService:
             }
 
             for symbol,(new_symbol,sec) in etf_mapping.items():
-                market_data = self.market_data_cache.get(new_symbol, {})
+                market_data = self.market_data_cache.get(symbol, {})
                 if market_data:
                     etf_data[symbol] = {
                         'price': market_data.get('last_price', 0),
@@ -358,8 +365,16 @@ class MarketService:
             
             for position in positions:
                 symbol = position.get('symbol')
+
+                if position.get('position_type') in ['call', 'put']:
+                    contract_details = position.get('contract_details', {})
+                    strike = contract_details.get('strike')
+                    expiry = contract_details.get('expiry', '').replace('-', '')
+                    right = contract_details.get('right')
+                    symbol = f"{symbol}_{strike}_{expiry}_{right}"
+
                 market_data = self.market_data_cache.get(symbol, {})
-                
+
                 if market_data and 'last_price' in market_data:
                     old_price = position.get('current_price', 0)
                     new_price = market_data['last_price']
@@ -389,7 +404,7 @@ class MarketService:
                         
                         position['last_update'] = datetime.now().isoformat()
                         updated_positions.append(position)
-            
+
             if updated_positions:
                 # Update positions in data store
                 all_positions = self.data_store.get_positions()
